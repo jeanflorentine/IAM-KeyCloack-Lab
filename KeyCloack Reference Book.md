@@ -701,28 +701,13 @@ LDAP survived because IAM directories optimize for very high read volume, hierar
 Schema 2.1 — Directories, LDAP and X.500: control and runtime path
 
 ```mermaid
-flowchart TB
-    subgraph CP[Control plane]
-        direction TB
-        A[Directories, LDAP and X.500]
-        B[Policy and configuration]
-        C[Identity and trust data]
-        A --> B
-        B --> C
-    end
-
-    subgraph RP[Runtime plane]
-        direction TB
-        D[Client or workload]
-        E[Keycloak]
-        F[Gateway or relying party]
-        G[Protected service]
-        D --> E
-        E --> F
-        F --> G
-    end
-
-    CP --> RP
+flowchart LR
+    App[Keycloak LDAP provider] --> Bind[Service account bind]
+    Bind --> Search[Search by login attribute]
+    Search --> Entry[User entry and objectClass]
+    Entry --> Groups[Group and role mappers]
+    Groups --> Token[OIDC claims issued]
+    Directory[(LDAP or AD)] -. indexes and ACLs .-> Search
 ```
 
 ## 2.4 Production notes
@@ -817,28 +802,17 @@ Enterprises keep Kerberos because integrated Windows authentication gives seamle
 Schema 3.1 — Kerberos, NTLM and legacy enterprise SSO: control and runtime path
 
 ```mermaid
-flowchart TB
-    subgraph CP[Control plane]
-        direction TB
-        A[Kerberos, NTLM and legacy enterprise SSO]
-        B[Policy and configuration]
-        C[Identity and trust data]
-        A --> B
-        B --> C
-    end
-
-    subgraph RP[Runtime plane]
-        direction TB
-        D[Client or workload]
-        E[Keycloak]
-        F[Gateway or relying party]
-        G[Protected service]
-        D --> E
-        E --> F
-        F --> G
-    end
-
-    CP --> RP
+sequenceDiagram
+    participant U as Domain User
+    participant C as Browser
+    participant K as KDC
+    participant S as Service
+    C->>K: AS-REQ user principal
+    K-->>C: AS-REP TGT
+    C->>K: TGS-REQ SPN
+    K-->>C: TGS-REP service ticket
+    C->>S: AP-REQ Kerberos ticket
+    S-->>C: AP-REP optional mutual auth
 ```
 
 ## 3.4 Production notes
@@ -933,28 +907,14 @@ Identity protocols are only trustworthy if signature and TLS trust are trustwort
 Schema 4.1 — PKI, X.509 and cryptographic trust: control and runtime path
 
 ```mermaid
-flowchart TB
-    subgraph CP[Control plane]
-        direction TB
-        A[PKI, X.509 and cryptographic trust]
-        B[Policy and configuration]
-        C[Identity and trust data]
-        A --> B
-        B --> C
-    end
-
-    subgraph RP[Runtime plane]
-        direction TB
-        D[Client or workload]
-        E[Keycloak]
-        F[Gateway or relying party]
-        G[Protected service]
-        D --> E
-        E --> F
-        F --> G
-    end
-
-    CP --> RP
+flowchart TD
+    RootCA[Root CA] --> IntCA[Intermediate CA]
+    IntCA --> IdPCert[Keycloak TLS certificate]
+    IntCA --> ClientCert[Client certificate]
+    IdPCert --> TLS[TLS handshake]
+    ClientCert --> MTLS[mTLS client authentication]
+    OCSP[OCSP or CRL checks] --> TLS
+    OCSP --> MTLS
 ```
 
 ## 4.4 Production notes
@@ -1049,28 +1009,14 @@ HTTP is stateless, but user journeys are stateful. Sessions are the continuity l
 Schema 5.1 — Sessions, cookies and the limits of HTTP authentication: control and runtime path
 
 ```mermaid
-flowchart TB
-    subgraph CP[Control plane]
-        direction TB
-        A[Sessions, cookies and the limits of HTTP authentication]
-        B[Policy and configuration]
-        C[Identity and trust data]
-        A --> B
-        B --> C
-    end
-
-    subgraph RP[Runtime plane]
-        direction TB
-        D[Client or workload]
-        E[Keycloak]
-        F[Gateway or relying party]
-        G[Protected service]
-        D --> E
-        E --> F
-        F --> G
-    end
-
-    CP --> RP
+stateDiagram-v2
+    [*] --> Unauthenticated
+    Unauthenticated --> Authenticated: credentials accepted
+    Authenticated --> SessionCookie: set secure cookie
+    SessionCookie --> ActiveSession: request with cookie
+    ActiveSession --> Renewed: idle refresh
+    ActiveSession --> Expired: absolute timeout
+    Expired --> Unauthenticated
 ```
 
 ## 5.4 Production notes
@@ -1165,28 +1111,17 @@ OAuth 2.0 was created to avoid password sharing between users and third-party ap
 Schema 6.1 — OAuth 2.0: delegation, grants and threat model: control and runtime path
 
 ```mermaid
-flowchart TB
-    subgraph CP[Control plane]
-        direction TB
-        A[OAuth 2.0: delegation, grants and threat model]
-        B[Policy and configuration]
-        C[Identity and trust data]
-        A --> B
-        B --> C
-    end
-
-    subgraph RP[Runtime plane]
-        direction TB
-        D[Client or workload]
-        E[Keycloak]
-        F[Gateway or relying party]
-        G[Protected service]
-        D --> E
-        E --> F
-        F --> G
-    end
-
-    CP --> RP
+sequenceDiagram
+    participant RO as Resource Owner
+    participant Client
+    participant AS as Authorization Server
+    participant RS as Resource Server
+    RO->>Client: start operation
+    Client->>AS: authorization request
+    AS-->>Client: authorization code
+    Client->>AS: token request with code
+    AS-->>Client: access token
+    Client->>RS: API call with token
 ```
 
 ## 6.4 Production notes
@@ -1281,28 +1216,15 @@ OIDC adds interoperable authentication semantics to OAuth 2.0: who authenticated
 Schema 7.1 — OpenID Connect: authentication on top of OAuth 2.0: control and runtime path
 
 ```mermaid
-flowchart TB
-    subgraph CP[Control plane]
-        direction TB
-        A[OpenID Connect: authentication on top of OAuth 2.0]
-        B[Policy and configuration]
-        C[Identity and trust data]
-        A --> B
-        B --> C
-    end
-
-    subgraph RP[Runtime plane]
-        direction TB
-        D[Client or workload]
-        E[Keycloak]
-        F[Gateway or relying party]
-        G[Protected service]
-        D --> E
-        E --> F
-        F --> G
-    end
-
-    CP --> RP
+flowchart LR
+    Client[OIDC client] --> Authz[Authorization endpoint]
+    Authz --> Login[User authentication]
+    Login --> Code[Authorization code]
+    Code --> Token[Token endpoint exchange]
+    Token --> IDToken[ID token validation]
+    Token --> AccessToken[Access token for API]
+    Client --> UserInfo[UserInfo endpoint optional]
+    UserInfo --> Claims[Claims normalization]
 ```
 
 ## 7.4 Production notes
@@ -1397,28 +1319,18 @@ JWT scales because verification can be local and stateless. The same property ma
 Schema 8.1 — JWT: structure, signature, validation and pitfalls: control and runtime path
 
 ```mermaid
-flowchart TB
-    subgraph CP[Control plane]
-        direction TB
-        A[JWT: structure, signature, validation and pitfalls]
-        B[Policy and configuration]
-        C[Identity and trust data]
-        A --> B
-        B --> C
-    end
-
-    subgraph RP[Runtime plane]
-        direction TB
-        D[Client or workload]
-        E[Keycloak]
-        F[Gateway or relying party]
-        G[Protected service]
-        D --> E
-        E --> F
-        F --> G
-    end
-
-    CP --> RP
+flowchart TD
+    JWT[JWT string] --> Header[Header]
+    JWT --> Payload[Payload claims]
+    JWT --> Signature[Signature]
+    Header --> AlgCheck[alg and kid validation]
+    Payload --> ClaimCheck[iss aud exp nbf checks]
+    Signature --> KeyFetch[JWKS key lookup]
+    AlgCheck --> Decision{valid}
+    ClaimCheck --> Decision
+    KeyFetch --> Decision
+    Decision -->|yes| Accept[Accept token]
+    Decision -->|no| Reject[Reject token]
 ```
 
 ## 8.4 Production notes
@@ -1513,28 +1425,14 @@ SAML remains dominant in enterprise SaaS and partner federation. Interoperabilit
 Schema 9.1 — SAML 2.0 and interoperability with OIDC: control and runtime path
 
 ```mermaid
-flowchart TB
-    subgraph CP[Control plane]
-        direction TB
-        A[SAML 2.0 and interoperability with OIDC]
-        B[Policy and configuration]
-        C[Identity and trust data]
-        A --> B
-        B --> C
-    end
-
-    subgraph RP[Runtime plane]
-        direction TB
-        D[Client or workload]
-        E[Keycloak]
-        F[Gateway or relying party]
-        G[Protected service]
-        D --> E
-        E --> F
-        F --> G
-    end
-
-    CP --> RP
+flowchart LR
+    SP[SAML service provider] --> AuthnReq[AuthnRequest]
+    AuthnReq --> IdP[SAML identity provider]
+    IdP --> Assertion[SAML assertion response]
+    Assertion --> SigCheck[XML signature validation]
+    SigCheck --> Conditions[Audience and time conditions]
+    Conditions --> Broker[Keycloak broker mapping]
+    Broker --> OIDC[OIDC token output]
 ```
 
 ## 9.4 Production notes
@@ -1630,27 +1528,14 @@ Schema 10.1 — PKCE, DPoP, mTLS-bound tokens and FAPI: control and runtime path
 
 ```mermaid
 flowchart TB
-    subgraph CP[Control plane]
-        direction TB
-        A[PKCE, DPoP, mTLS-bound tokens and FAPI]
-        B[Policy and configuration]
-        C[Identity and trust data]
-        A --> B
-        B --> C
-    end
-
-    subgraph RP[Runtime plane]
-        direction TB
-        D[Client or workload]
-        E[Keycloak]
-        F[Gateway or relying party]
-        G[Protected service]
-        D --> E
-        E --> F
-        F --> G
-    end
-
-    CP --> RP
+    PublicClient[Public client] --> PKCE[PKCE verifier challenge]
+    PKCE --> AuthCode[Authorization code flow]
+    AuthCode --> Token[Token endpoint]
+    Token --> DPoP[DPoP proof binding]
+    Token --> MTLS[mTLS certificate binding]
+    DPoP --> API[Replay protection with jti]
+    MTLS --> API
+    API --> FAPI[FAPI profile controls]
 ```
 
 ## 10.4 Production notes
@@ -1745,28 +1630,14 @@ Internal architecture (Quarkus, Infinispan, JPA, providers) is a recurring sourc
 Schema 11.1 — Internal architecture (Quarkus, Infinispan, JPA, providers): control and runtime path
 
 ```mermaid
-flowchart TB
-    subgraph CP[Control plane]
-        direction TB
-        A[Internal architecture (Quarkus, Infinispan, JPA, providers)]
-        B[Policy and configuration]
-        C[Identity and trust data]
-        A --> B
-        B --> C
-    end
-
-    subgraph RP[Runtime plane]
-        direction TB
-        D[Client or workload]
-        E[Keycloak]
-        F[Gateway or relying party]
-        G[Protected service]
-        D --> E
-        E --> F
-        F --> G
-    end
-
-    CP --> RP
+flowchart LR
+    Request[Auth request] --> Runtime[Keycloak Quarkus runtime]
+    Runtime --> FlowEngine[Authentication flow engine]
+    FlowEngine --> Cache[Infinispan caches]
+    FlowEngine --> Database[(JPA to PostgreSQL)]
+    FlowEngine --> Providers[Provider SPI implementations]
+    Cache --> Sessions[User and client sessions]
+    Database --> Models[Realm and user models]
 ```
 
 ## 11.4 Production notes
@@ -1861,28 +1732,15 @@ Realms, clients, roles, groups and client scopes is a recurring source of produc
 Schema 12.1 — Realms, clients, roles, groups and client scopes: control and runtime path
 
 ```mermaid
-flowchart TB
-    subgraph CP[Control plane]
-        direction TB
-        A[Realms, clients, roles, groups and client scopes]
-        B[Policy and configuration]
-        C[Identity and trust data]
-        A --> B
-        B --> C
-    end
-
-    subgraph RP[Runtime plane]
-        direction TB
-        D[Client or workload]
-        E[Keycloak]
-        F[Gateway or relying party]
-        G[Protected service]
-        D --> E
-        E --> F
-        F --> G
-    end
-
-    CP --> RP
+flowchart TD
+    Realm[Realm boundary] --> Clients[Clients]
+    Realm --> Users[Users]
+    Realm --> RealmRoles[Realm roles]
+    RealmRoles --> ClientRoles[Client roles]
+    Users --> Groups[Groups]
+    Groups --> EffectiveRoles[Effective permissions]
+    Clients --> Scopes[Client scopes]
+    Scopes --> Claims[Token claims]
 ```
 
 ## 12.4 Production notes
@@ -1977,28 +1835,15 @@ Authentication flows, MFA, WebAuthn and step-up is a recurring source of product
 Schema 13.1 — Authentication flows, MFA, WebAuthn and step-up: control and runtime path
 
 ```mermaid
-flowchart TB
-    subgraph CP[Control plane]
-        direction TB
-        A[Authentication flows, MFA, WebAuthn and step-up]
-        B[Policy and configuration]
-        C[Identity and trust data]
-        A --> B
-        B --> C
-    end
-
-    subgraph RP[Runtime plane]
-        direction TB
-        D[Client or workload]
-        E[Keycloak]
-        F[Gateway or relying party]
-        G[Protected service]
-        D --> E
-        E --> F
-        F --> G
-    end
-
-    CP --> RP
+flowchart LR
+    Browser[User browser] --> FlowSelect[Flow selection]
+    FlowSelect --> Password[Primary authentication]
+    Password --> NeedMFA{MFA required}
+    NeedMFA -->|yes| SecondFactor[OTP or WebAuthn]
+    NeedMFA -->|no| Session[Authenticated session]
+    SecondFactor --> Session
+    Session --> StepUp[Step-up flow for sensitive actions]
+    StepUp --> ACR[Higher assurance claim]
 ```
 
 ## 13.4 Production notes
@@ -2093,28 +1938,14 @@ User federation: LDAP, Active Directory, custom stores is a recurring source of 
 Schema 14.1 — User federation: LDAP, Active Directory, custom stores: control and runtime path
 
 ```mermaid
-flowchart TB
-    subgraph CP[Control plane]
-        direction TB
-        A[User federation: LDAP, Active Directory, custom stores]
-        B[Policy and configuration]
-        C[Identity and trust data]
-        A --> B
-        B --> C
-    end
-
-    subgraph RP[Runtime plane]
-        direction TB
-        D[Client or workload]
-        E[Keycloak]
-        F[Gateway or relying party]
-        G[Protected service]
-        D --> E
-        E --> F
-        F --> G
-    end
-
-    CP --> RP
+flowchart TD
+    Login[Login attempt] --> Provider[LDAP federation provider]
+    Provider --> Directory[LDAP or AD query]
+    Directory --> Mapper[Attribute and group mapping]
+    Mapper --> Cache[Imported user cache]
+    Cache --> Token[Token issuance]
+    Directory -. periodic sync .-> Sync[Full and changed users sync]
+    Sync --> Cache
 ```
 
 ## 14.4 Production notes
@@ -2209,28 +2040,14 @@ Identity brokering and multi-tenancy is a recurring source of production risk be
 Schema 15.1 — Identity brokering and multi-tenancy: control and runtime path
 
 ```mermaid
-flowchart TB
-    subgraph CP[Control plane]
-        direction TB
-        A[Identity brokering and multi-tenancy]
-        B[Policy and configuration]
-        C[Identity and trust data]
-        A --> B
-        B --> C
-    end
-
-    subgraph RP[Runtime plane]
-        direction TB
-        D[Client or workload]
-        E[Keycloak]
-        F[Gateway or relying party]
-        G[Protected service]
-        D --> E
-        E --> F
-        F --> G
-    end
-
-    CP --> RP
+flowchart LR
+    App[Application] --> BrokerRealm[Keycloak broker realm]
+    BrokerRealm --> IdPA[External IdP A]
+    BrokerRealm --> IdPB[External IdP B]
+    IdPA --> Link[Identity link by broker id]
+    IdPB --> Link
+    Link --> Tenant[Tenant policy routing]
+    Tenant --> Token[Unified local token]
 ```
 
 ## 15.4 Production notes
@@ -2326,27 +2143,14 @@ Schema 16.1 — Authorization Services (ABAC, UMA 2.0) and external policy engin
 
 ```mermaid
 flowchart TB
-    subgraph CP[Control plane]
-        direction TB
-        A[Authorization Services (ABAC, UMA 2.0) and external policy engines]
-        B[Policy and configuration]
-        C[Identity and trust data]
-        A --> B
-        B --> C
-    end
-
-    subgraph RP[Runtime plane]
-        direction TB
-        D[Client or workload]
-        E[Keycloak]
-        F[Gateway or relying party]
-        G[Protected service]
-        D --> E
-        E --> F
-        F --> G
-    end
-
-    CP --> RP
+    User[Resource owner] --> PEP[Policy enforcement point]
+    PEP --> KeycloakAuthz[Keycloak authorization services]
+    KeycloakAuthz --> PDP[Policy decision point]
+    PDP --> UMA[UMA permission ticket and RPT]
+    PDP --> ExternalPDP[External PDP optional]
+    ExternalPDP --> PDP
+    UMA --> PEP
+    PEP --> API[Protected API decision]
 ```
 
 ## 16.4 Production notes
@@ -2441,28 +2245,13 @@ Deployment on RHEL, containers, Kubernetes and OpenShift is a recurring source o
 Schema 17.1 — Deployment on RHEL, containers, Kubernetes and OpenShift: control and runtime path
 
 ```mermaid
-flowchart TB
-    subgraph CP[Control plane]
-        direction TB
-        A[Deployment on RHEL, containers, Kubernetes and OpenShift]
-        B[Policy and configuration]
-        C[Identity and trust data]
-        A --> B
-        B --> C
-    end
-
-    subgraph RP[Runtime plane]
-        direction TB
-        D[Client or workload]
-        E[Keycloak]
-        F[Gateway or relying party]
-        G[Protected service]
-        D --> E
-        E --> F
-        F --> G
-    end
-
-    CP --> RP
+flowchart LR
+    GitOps[Configuration repository] --> Image[Hardened Keycloak image]
+    Image --> Cluster[Kubernetes or OpenShift]
+    Cluster --> Pods[Keycloak pods]
+    Pods --> Database[(External PostgreSQL)]
+    Ingress[Ingress or Route TLS] --> Pods
+    Secrets[Secret manager integration] --> Pods
 ```
 
 ## 17.4 Production notes
@@ -2557,28 +2346,17 @@ High availability, clustering and multi-site is a recurring source of production
 Schema 18.1 — High availability, clustering and multi-site: control and runtime path
 
 ```mermaid
-flowchart TB
-    subgraph CP[Control plane]
-        direction TB
-        A[High availability, clustering and multi-site]
-        B[Policy and configuration]
-        C[Identity and trust data]
-        A --> B
-        B --> C
-    end
-
-    subgraph RP[Runtime plane]
-        direction TB
-        D[Client or workload]
-        E[Keycloak]
-        F[Gateway or relying party]
-        G[Protected service]
-        D --> E
-        E --> F
-        F --> G
-    end
-
-    CP --> RP
+flowchart TD
+    SiteA[Site A] --> LBA[Local load balancer]
+    SiteB[Site B] --> LBB[Local load balancer]
+    LBA --> NodeA1[Node A1]
+    LBA --> NodeA2[Node A2]
+    LBB --> NodeB1[Node B1]
+    LBB --> NodeB2[Node B2]
+    NodeA1 <--> CacheA[(Infinispan site A)]
+    NodeB1 <--> CacheB[(Infinispan site B)]
+    CacheA <--> XSite[x-site replication]
+    XSite <--> CacheB
 ```
 
 ## 18.4 Production notes
@@ -2673,28 +2451,14 @@ Reverse proxies and API Gateways is a recurring source of production risk becaus
 Schema 19.1 — Reverse proxies and API Gateways: control and runtime path
 
 ```mermaid
-flowchart TB
-    subgraph CP[Control plane]
-        direction TB
-        A[Reverse proxies and API Gateways]
-        B[Policy and configuration]
-        C[Identity and trust data]
-        A --> B
-        B --> C
-    end
-
-    subgraph RP[Runtime plane]
-        direction TB
-        D[Client or workload]
-        E[Keycloak]
-        F[Gateway or relying party]
-        G[Protected service]
-        D --> E
-        E --> F
-        F --> G
-    end
-
-    CP --> RP
+flowchart LR
+    Client[Browser or API client] --> Gateway[Reverse proxy or API gateway]
+    Gateway --> TLS[TLS termination or passthrough]
+    TLS --> HeaderPolicy[Forwarded header policy]
+    HeaderPolicy --> Keycloak[Keycloak endpoints]
+    Gateway --> WAF[WAF and rate limiting]
+    WAF --> Keycloak
+    Keycloak --> Tokens[Token operations]
 ```
 
 ## 19.4 Production notes
@@ -2789,28 +2553,15 @@ Performance, tuning and capacity planning is a recurring source of production ri
 Schema 20.1 — Performance, tuning and capacity planning: control and runtime path
 
 ```mermaid
-flowchart TB
-    subgraph CP[Control plane]
-        direction TB
-        A[Performance, tuning and capacity planning]
-        B[Policy and configuration]
-        C[Identity and trust data]
-        A --> B
-        B --> C
-    end
-
-    subgraph RP[Runtime plane]
-        direction TB
-        D[Client or workload]
-        E[Keycloak]
-        F[Gateway or relying party]
-        G[Protected service]
-        D --> E
-        E --> F
-        F --> G
-    end
-
-    CP --> RP
+flowchart TD
+    Load[Concurrent login load] --> Metrics[P95 latency and errors]
+    Metrics --> Bottleneck{Primary bottleneck}
+    Bottleneck -->|Database| DBTune[Index and pool tuning]
+    Bottleneck -->|Cache| CacheTune[Topology and eviction tuning]
+    Bottleneck -->|Compute| JVMTune[JVM and GC tuning]
+    DBTune --> Capacity[Capacity model and headroom]
+    CacheTune --> Capacity
+    JVMTune --> Capacity
 ```
 
 ## 20.4 Production notes
@@ -2905,28 +2656,14 @@ Observability, auditing and SIEM integration is a recurring source of production
 Schema 21.1 — Observability, auditing and SIEM integration: control and runtime path
 
 ```mermaid
-flowchart TB
-    subgraph CP[Control plane]
-        direction TB
-        A[Observability, auditing and SIEM integration]
-        B[Policy and configuration]
-        C[Identity and trust data]
-        A --> B
-        B --> C
-    end
-
-    subgraph RP[Runtime plane]
-        direction TB
-        D[Client or workload]
-        E[Keycloak]
-        F[Gateway or relying party]
-        G[Protected service]
-        D --> E
-        E --> F
-        F --> G
-    end
-
-    CP --> RP
+flowchart LR
+    AuthEvents[Authentication events] --> Pipeline[Telemetry pipeline]
+    AdminEvents[Admin events] --> Pipeline
+    Logs[Runtime logs] --> Pipeline
+    Metrics[Prometheus metrics] --> Dashboards[Grafana dashboards]
+    Pipeline --> SIEM[SIEM correlation]
+    SIEM --> Alerts[Security and ops alerts]
+    Alerts --> Response[Incident response]
 ```
 
 ## 21.4 Production notes
@@ -3021,28 +2758,16 @@ Upgrades, backup and disaster recovery is a recurring source of production risk 
 Schema 22.1 — Upgrades, backup and disaster recovery: control and runtime path
 
 ```mermaid
-flowchart TB
-    subgraph CP[Control plane]
-        direction TB
-        A[Upgrades, backup and disaster recovery]
-        B[Policy and configuration]
-        C[Identity and trust data]
-        A --> B
-        B --> C
-    end
-
-    subgraph RP[Runtime plane]
-        direction TB
-        D[Client or workload]
-        E[Keycloak]
-        F[Gateway or relying party]
-        G[Protected service]
-        D --> E
-        E --> F
-        F --> G
-    end
-
-    CP --> RP
+flowchart TD
+    Current[Current cluster] --> Backup[Backup and export]
+    Backup --> Rehearsal[Restore rehearsal]
+    Rehearsal --> Upgrade[Version upgrade]
+    Upgrade --> Smoke[Protocol smoke tests]
+    Smoke --> Cutover[Production cutover]
+    Cutover --> Observe[Post-upgrade monitoring]
+    Observe --> Decision{Rollback required}
+    Decision -->|yes| Restore[Restore validated backup]
+    Decision -->|no| Close[Close maintenance window]
 ```
 
 ## 22.4 Production notes
@@ -3137,28 +2862,13 @@ Extending Keycloak: SPIs, custom providers, themes is a recurring source of prod
 Schema 23.1 — Extending Keycloak: SPIs, custom providers, themes: control and runtime path
 
 ```mermaid
-flowchart TB
-    subgraph CP[Control plane]
-        direction TB
-        A[Extending Keycloak: SPIs, custom providers, themes]
-        B[Policy and configuration]
-        C[Identity and trust data]
-        A --> B
-        B --> C
-    end
-
-    subgraph RP[Runtime plane]
-        direction TB
-        D[Client or workload]
-        E[Keycloak]
-        F[Gateway or relying party]
-        G[Protected service]
-        D --> E
-        E --> F
-        F --> G
-    end
-
-    CP --> RP
+flowchart LR
+    SPI[Provider SPI contract] --> CustomCode[Custom provider implementation]
+    CustomCode --> Build[Build and package]
+    Build --> Deploy[Deploy provider artifact]
+    Deploy --> Register[Enable in realm config]
+    Register --> Runtime[Flow execution]
+    Runtime --> Monitoring[Metrics and logs]
 ```
 
 ## 23.4 Production notes
@@ -3253,28 +2963,15 @@ Configuration as code: Admin CLI, Terraform, Ansible, Operator is a recurring so
 Schema 24.1 — Configuration as code: Admin CLI, Terraform, Ansible, Operator: control and runtime path
 
 ```mermaid
-flowchart TB
-    subgraph CP[Control plane]
-        direction TB
-        A[Configuration as code: Admin CLI, Terraform, Ansible, Operator]
-        B[Policy and configuration]
-        C[Identity and trust data]
-        A --> B
-        B --> C
-    end
-
-    subgraph RP[Runtime plane]
-        direction TB
-        D[Client or workload]
-        E[Keycloak]
-        F[Gateway or relying party]
-        G[Protected service]
-        D --> E
-        E --> F
-        F --> G
-    end
-
-    CP --> RP
+flowchart TD
+    Git[Git source of truth] --> Terraform[Terraform resources]
+    Git --> Ansible[Ansible tasks]
+    Git --> KCADM[kcadm scripts]
+    Terraform --> AdminAPI[Keycloak Admin API]
+    Ansible --> AdminAPI
+    KCADM --> AdminAPI
+    AdminAPI --> Drift[Drift detection]
+    Drift --> Git
 ```
 
 ## 24.4 Production notes
@@ -3369,28 +3066,14 @@ Migrating from a legacy IdP is a recurring source of production risk because tea
 Schema 25.1 — Migrating from a legacy IdP: control and runtime path
 
 ```mermaid
-flowchart TB
-    subgraph CP[Control plane]
-        direction TB
-        A[Migrating from a legacy IdP]
-        B[Policy and configuration]
-        C[Identity and trust data]
-        A --> B
-        B --> C
-    end
-
-    subgraph RP[Runtime plane]
-        direction TB
-        D[Client or workload]
-        E[Keycloak]
-        F[Gateway or relying party]
-        G[Protected service]
-        D --> E
-        E --> F
-        F --> G
-    end
-
-    CP --> RP
+flowchart LR
+    LegacyIdP[Legacy IdP] --> Export[Export identities and apps]
+    Export --> Transform[Transform claims and entitlements]
+    Transform --> Import[Import to Keycloak]
+    Import --> ParallelRun[Parallel run period]
+    ParallelRun --> Pilot[Wave pilot]
+    Pilot --> Cutover[Progressive cutover]
+    Cutover --> Decom[Legacy decommission]
 ```
 
 ## 25.4 Production notes
@@ -3485,28 +3168,14 @@ IAM ↔ PKI convergence: mTLS, HSM, certificate lifecycle is a recurring source 
 Schema 26.1 — IAM ↔ PKI convergence: mTLS, HSM, certificate lifecycle: control and runtime path
 
 ```mermaid
-flowchart TB
-    subgraph CP[Control plane]
-        direction TB
-        A[IAM ↔ PKI convergence: mTLS, HSM, certificate lifecycle]
-        B[Policy and configuration]
-        C[Identity and trust data]
-        A --> B
-        B --> C
-    end
-
-    subgraph RP[Runtime plane]
-        direction TB
-        D[Client or workload]
-        E[Keycloak]
-        F[Gateway or relying party]
-        G[Protected service]
-        D --> E
-        E --> F
-        F --> G
-    end
-
-    CP --> RP
+flowchart TD
+    Proofing[Identity proofing] --> CertIssue[Certificate issuance]
+    CertIssue --> HSM[CA keys in HSM]
+    HSM --> ClientCert[Client certificate]
+    ClientCert --> X509Auth[Keycloak X509 authenticator]
+    X509Auth --> Token[Certificate-bound token]
+    Lifecycle[Renew revoke rotate] --> Status[CRL or OCSP publication]
+    Status --> X509Auth
 ```
 
 ## 26.4 Production notes
@@ -3601,28 +3270,20 @@ Comparison: Keycloak, RHBK, Okta, Entra ID, Ping Identity, ForgeRock, Auth0 is a
 Schema 27.1 — Comparison: Keycloak, RHBK, Okta, Entra ID, Ping Identity, ForgeRock, Auth0: control and runtime path
 
 ```mermaid
-flowchart TB
-    subgraph CP[Control plane]
-        direction TB
-        A[Comparison: Keycloak, RHBK, Okta, Entra ID, Ping Identity, ForgeRock, Auth0]
-        B[Policy and configuration]
-        C[Identity and trust data]
-        A --> B
-        B --> C
-    end
-
-    subgraph RP[Runtime plane]
-        direction TB
-        D[Client or workload]
-        E[Keycloak]
-        F[Gateway or relying party]
-        G[Protected service]
-        D --> E
-        E --> F
-        F --> G
-    end
-
-    CP --> RP
+flowchart LR
+    Requirements[Requirements and constraints] --> Criteria[Evaluation criteria]
+    Criteria --> KC[Keycloak]
+    Criteria --> Okta[Okta]
+    Criteria --> Entra[Entra ID]
+    Criteria --> Ping[Ping Identity]
+    Criteria --> ForgeRock[ForgeRock]
+    Criteria --> Auth0[Auth0]
+    KC --> Matrix[Weighted decision matrix]
+    Okta --> Matrix
+    Entra --> Matrix
+    Ping --> Matrix
+    ForgeRock --> Matrix
+    Auth0 --> Matrix
 ```
 
 ## 27.4 Production notes
@@ -3717,28 +3378,15 @@ Labs (Docker Compose, Kubernetes, OpenShift) is a recurring source of production
 Schema 28.1 — Labs (Docker Compose, Kubernetes, OpenShift): control and runtime path
 
 ```mermaid
-flowchart TB
-    subgraph CP[Control plane]
-        direction TB
-        A[Labs (Docker Compose, Kubernetes, OpenShift)]
-        B[Policy and configuration]
-        C[Identity and trust data]
-        A --> B
-        B --> C
-    end
-
-    subgraph RP[Runtime plane]
-        direction TB
-        D[Client or workload]
-        E[Keycloak]
-        F[Gateway or relying party]
-        G[Protected service]
-        D --> E
-        E --> F
-        F --> G
-    end
-
-    CP --> RP
+flowchart TD
+    Workstation[Engineer workstation] --> ComposeLab[Docker Compose lab]
+    ComposeLab --> KCCompose[Keycloak]
+    ComposeLab --> LDAP[OpenLDAP]
+    ComposeLab --> DB[(PostgreSQL)]
+    K8sLab[Kubernetes or OpenShift lab] --> Ingress[Ingress with TLS]
+    Ingress --> KCPods[Keycloak pods]
+    KCCompose --> Exercises[Hands-on exercises]
+    KCPods --> Exercises
 ```
 
 ## 28.4 Production notes
@@ -3833,28 +3481,18 @@ Production incident walkthroughs is a recurring source of production risk becaus
 Schema 29.1 — Production incident walkthroughs: control and runtime path
 
 ```mermaid
-flowchart TB
-    subgraph CP[Control plane]
-        direction TB
-        A[Production incident walkthroughs]
-        B[Policy and configuration]
-        C[Identity and trust data]
-        A --> B
-        B --> C
-    end
-
-    subgraph RP[Runtime plane]
-        direction TB
-        D[Client or workload]
-        E[Keycloak]
-        F[Gateway or relying party]
-        G[Protected service]
-        D --> E
-        E --> F
-        F --> G
-    end
-
-    CP --> RP
+sequenceDiagram
+    participant User
+    participant Gateway
+    participant Keycloak
+    participant Postgres
+    User->>Gateway: authenticate request
+    Gateway->>Keycloak: forward auth flow
+    Keycloak->>Postgres: read session and realm data
+    Postgres-->>Keycloak: timeout or slow response
+    Keycloak-->>Gateway: 5xx or invalid_grant
+    Gateway-->>User: login failure
+    Note over Keycloak,Postgres: Triage links DB saturation to auth outage
 ```
 
 ## 29.4 Production notes
@@ -3949,28 +3587,14 @@ Architecture case studies is a recurring source of production risk because teams
 Schema 30.1 — Architecture case studies: control and runtime path
 
 ```mermaid
-flowchart TB
-    subgraph CP[Control plane]
-        direction TB
-        A[Architecture case studies]
-        B[Policy and configuration]
-        C[Identity and trust data]
-        A --> B
-        B --> C
-    end
-
-    subgraph RP[Runtime plane]
-        direction TB
-        D[Client or workload]
-        E[Keycloak]
-        F[Gateway or relying party]
-        G[Protected service]
-        D --> E
-        E --> F
-        F --> G
-    end
-
-    CP --> RP
+flowchart LR
+    Context[Business context] --> Drivers[Architecture drivers]
+    Drivers --> Options[Candidate IAM designs]
+    Options --> Tradeoffs[Security latency operability trade-offs]
+    Tradeoffs --> Decision[Target architecture decision]
+    Decision --> ADR[Architecture decision records]
+    ADR --> Rollout[Implementation roadmap]
+    Rollout --> Review[Threat model and design review]
 ```
 
 ## 30.4 Production notes
@@ -4065,28 +3689,13 @@ Over-designed architectures can underperform due to unnecessary hops and overval
 Schema 31.1 — 200+ interview questions with expected answers: control and runtime path
 
 ```mermaid
-flowchart TB
-    subgraph CP[Control plane]
-        direction TB
-        A[200+ interview questions with expected answers]
-        B[Policy and configuration]
-        C[Identity and trust data]
-        A --> B
-        B --> C
-    end
-
-    subgraph RP[Runtime plane]
-        direction TB
-        D[Client or workload]
-        E[Keycloak]
-        F[Gateway or relying party]
-        G[Protected service]
-        D --> E
-        E --> F
-        F --> G
-    end
-
-    CP --> RP
+flowchart TD
+    QuestionPool[Question pool mapped to Chapters 1-30] --> MixedSets[Mixed domain interview sets]
+    MixedSets --> LevelFilter[Difficulty filter B I S E]
+    LevelFilter --> TimedRounds[Timed interview rounds]
+    TimedRounds --> Scoring[Rubric scoring and gap tagging]
+    Scoring --> Remediation[Targeted revision plan]
+    Remediation --> QuestionPool
 ```
 
 ## 31.4 Production notes
@@ -4125,26 +3734,613 @@ Short timed drills improve response fluency but should be balanced with deep-div
 
 ## 31.7 Interview questions (graded)
 
-**Beginner**
+**Beginner (1-50)**
 
-- **Q:** What is the primary goal of "200+ interview questions with expected answers" in a Keycloak platform?
-- **Expected answer:** Focus on build interview mastery through structured answer patterns and topic coverage.
+- **Q1:** What core concept links IAM fundamentals with JWT validation in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting IAM fundamentals and JWT validation.
 
-**Intermediate**
+- **Q2:** What core concept links LDAP directories with Keycloak internals in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting LDAP directories and Keycloak internals.
 
-- **Q:** Which failure mode appears first when this area is misconfigured?
-- **Expected answer:** Usually one of: Memorizing one-line definitions only.
+- **Q3:** What core concept links Kerberos and NTLM with user federation in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting Kerberos and NTLM and user federation.
 
-**Senior**
+- **Q4:** What core concept links PKI and X.509 with deployment patterns in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting PKI and X.509 and deployment patterns.
 
-- **Q:** What design trade-off do you document before rollout for 200+ interview questions with expected answers?
-- **Expected answer:** Document boundary ownership, rollback plan, and security vs latency trade-offs.
+- **Q5:** What core concept links sessions and cookies with performance tuning in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting sessions and cookies and performance tuning.
 
-**Expert**
+- **Q6:** What core concept links OAuth 2.0 grants with SPIs and extensions in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting OAuth 2.0 grants and SPIs and extensions.
 
-- **Q:** How do you prove this domain is production-ready under failure?
-- **Expected answer:** By rehearsal with measurable SLO/security outcomes and audited control evidence.
+- **Q7:** What core concept links OpenID Connect with IAM and PKI convergence in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting OpenID Connect and IAM and PKI convergence.
 
+- **Q8:** What core concept links JWT validation with incident response in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting JWT validation and incident response.
+
+- **Q9:** What core concept links SAML interoperability with LDAP directories in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting SAML interoperability and LDAP directories.
+
+- **Q10:** What core concept links PKCE DPoP mTLS FAPI with sessions and cookies in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting PKCE DPoP mTLS FAPI and sessions and cookies.
+
+- **Q11:** What core concept links Keycloak internals with JWT validation in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting Keycloak internals and JWT validation.
+
+- **Q12:** What core concept links realms and scopes with Keycloak internals in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting realms and scopes and Keycloak internals.
+
+- **Q13:** What core concept links authentication flows and MFA with user federation in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting authentication flows and MFA and user federation.
+
+- **Q14:** What core concept links user federation with deployment patterns in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting user federation and deployment patterns.
+
+- **Q15:** What core concept links identity brokering with performance tuning in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting identity brokering and performance tuning.
+
+- **Q16:** What core concept links authorization services UMA with SPIs and extensions in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting authorization services UMA and SPIs and extensions.
+
+- **Q17:** What core concept links deployment patterns with IAM and PKI convergence in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting deployment patterns and IAM and PKI convergence.
+
+- **Q18:** What core concept links HA and multi-site with incident response in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting HA and multi-site and incident response.
+
+- **Q19:** What core concept links reverse proxies and gateways with LDAP directories in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting reverse proxies and gateways and LDAP directories.
+
+- **Q20:** What core concept links performance tuning with sessions and cookies in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting performance tuning and sessions and cookies.
+
+- **Q21:** What core concept links observability and SIEM with JWT validation in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting observability and SIEM and JWT validation.
+
+- **Q22:** What core concept links upgrade and disaster recovery with Keycloak internals in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting upgrade and disaster recovery and Keycloak internals.
+
+- **Q23:** What core concept links SPIs and extensions with user federation in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting SPIs and extensions and user federation.
+
+- **Q24:** What core concept links configuration as code with deployment patterns in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting configuration as code and deployment patterns.
+
+- **Q25:** What core concept links legacy migration with performance tuning in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting legacy migration and performance tuning.
+
+- **Q26:** What core concept links IAM and PKI convergence with SPIs and extensions in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting IAM and PKI convergence and SPIs and extensions.
+
+- **Q27:** What core concept links vendor comparison with IAM and PKI convergence in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting vendor comparison and IAM and PKI convergence.
+
+- **Q28:** What core concept links hands-on labs with incident response in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting hands-on labs and incident response.
+
+- **Q29:** What core concept links incident response with LDAP directories in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting incident response and LDAP directories.
+
+- **Q30:** What core concept links architecture case studies with sessions and cookies in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting architecture case studies and sessions and cookies.
+
+- **Q31:** What core concept links IAM fundamentals with JWT validation in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting IAM fundamentals and JWT validation.
+
+- **Q32:** What core concept links LDAP directories with Keycloak internals in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting LDAP directories and Keycloak internals.
+
+- **Q33:** What core concept links Kerberos and NTLM with user federation in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting Kerberos and NTLM and user federation.
+
+- **Q34:** What core concept links PKI and X.509 with deployment patterns in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting PKI and X.509 and deployment patterns.
+
+- **Q35:** What core concept links sessions and cookies with performance tuning in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting sessions and cookies and performance tuning.
+
+- **Q36:** What core concept links OAuth 2.0 grants with SPIs and extensions in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting OAuth 2.0 grants and SPIs and extensions.
+
+- **Q37:** What core concept links OpenID Connect with IAM and PKI convergence in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting OpenID Connect and IAM and PKI convergence.
+
+- **Q38:** What core concept links JWT validation with incident response in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting JWT validation and incident response.
+
+- **Q39:** What core concept links SAML interoperability with LDAP directories in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting SAML interoperability and LDAP directories.
+
+- **Q40:** What core concept links PKCE DPoP mTLS FAPI with sessions and cookies in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting PKCE DPoP mTLS FAPI and sessions and cookies.
+
+- **Q41:** What core concept links Keycloak internals with JWT validation in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting Keycloak internals and JWT validation.
+
+- **Q42:** What core concept links realms and scopes with Keycloak internals in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting realms and scopes and Keycloak internals.
+
+- **Q43:** What core concept links authentication flows and MFA with user federation in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting authentication flows and MFA and user federation.
+
+- **Q44:** What core concept links user federation with deployment patterns in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting user federation and deployment patterns.
+
+- **Q45:** What core concept links identity brokering with performance tuning in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting identity brokering and performance tuning.
+
+- **Q46:** What core concept links authorization services UMA with SPIs and extensions in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting authorization services UMA and SPIs and extensions.
+
+- **Q47:** What core concept links deployment patterns with IAM and PKI convergence in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting deployment patterns and IAM and PKI convergence.
+
+- **Q48:** What core concept links HA and multi-site with incident response in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting HA and multi-site and incident response.
+
+- **Q49:** What core concept links reverse proxies and gateways with LDAP directories in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting reverse proxies and gateways and LDAP directories.
+
+- **Q50:** What core concept links performance tuning with sessions and cookies in a Keycloak platform?
+  **Expected answer:** State the identity objective first, then the protocol or component boundary connecting performance tuning and sessions and cookies.
+
+**Intermediate (51-100)**
+
+- **Q51:** Which validation checks prevent trust failures when combining IAM fundamentals, JWT validation, and user federation?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q52:** Which validation checks prevent trust failures when combining LDAP directories, Keycloak internals, and reverse proxies and gateways?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q53:** Which validation checks prevent trust failures when combining Kerberos and NTLM, user federation, and configuration as code?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q54:** Which validation checks prevent trust failures when combining PKI and X.509, deployment patterns, and incident response?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q55:** Which validation checks prevent trust failures when combining sessions and cookies, performance tuning, and PKI and X.509?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q56:** Which validation checks prevent trust failures when combining OAuth 2.0 grants, SPIs and extensions, and SAML interoperability?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q57:** Which validation checks prevent trust failures when combining OpenID Connect, IAM and PKI convergence, and user federation?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q58:** Which validation checks prevent trust failures when combining JWT validation, incident response, and reverse proxies and gateways?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q59:** Which validation checks prevent trust failures when combining SAML interoperability, LDAP directories, and configuration as code?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q60:** Which validation checks prevent trust failures when combining PKCE DPoP mTLS FAPI, sessions and cookies, and incident response?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q61:** Which validation checks prevent trust failures when combining Keycloak internals, JWT validation, and PKI and X.509?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q62:** Which validation checks prevent trust failures when combining realms and scopes, Keycloak internals, and SAML interoperability?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q63:** Which validation checks prevent trust failures when combining authentication flows and MFA, user federation, and user federation?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q64:** Which validation checks prevent trust failures when combining user federation, deployment patterns, and reverse proxies and gateways?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q65:** Which validation checks prevent trust failures when combining identity brokering, performance tuning, and configuration as code?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q66:** Which validation checks prevent trust failures when combining authorization services UMA, SPIs and extensions, and incident response?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q67:** Which validation checks prevent trust failures when combining deployment patterns, IAM and PKI convergence, and PKI and X.509?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q68:** Which validation checks prevent trust failures when combining HA and multi-site, incident response, and SAML interoperability?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q69:** Which validation checks prevent trust failures when combining reverse proxies and gateways, LDAP directories, and user federation?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q70:** Which validation checks prevent trust failures when combining performance tuning, sessions and cookies, and reverse proxies and gateways?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q71:** Which validation checks prevent trust failures when combining observability and SIEM, JWT validation, and configuration as code?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q72:** Which validation checks prevent trust failures when combining upgrade and disaster recovery, Keycloak internals, and incident response?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q73:** Which validation checks prevent trust failures when combining SPIs and extensions, user federation, and PKI and X.509?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q74:** Which validation checks prevent trust failures when combining configuration as code, deployment patterns, and SAML interoperability?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q75:** Which validation checks prevent trust failures when combining legacy migration, performance tuning, and user federation?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q76:** Which validation checks prevent trust failures when combining IAM and PKI convergence, SPIs and extensions, and reverse proxies and gateways?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q77:** Which validation checks prevent trust failures when combining vendor comparison, IAM and PKI convergence, and configuration as code?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q78:** Which validation checks prevent trust failures when combining hands-on labs, incident response, and incident response?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q79:** Which validation checks prevent trust failures when combining incident response, LDAP directories, and PKI and X.509?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q80:** Which validation checks prevent trust failures when combining architecture case studies, sessions and cookies, and SAML interoperability?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q81:** Which validation checks prevent trust failures when combining IAM fundamentals, JWT validation, and user federation?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q82:** Which validation checks prevent trust failures when combining LDAP directories, Keycloak internals, and reverse proxies and gateways?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q83:** Which validation checks prevent trust failures when combining Kerberos and NTLM, user federation, and configuration as code?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q84:** Which validation checks prevent trust failures when combining PKI and X.509, deployment patterns, and incident response?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q85:** Which validation checks prevent trust failures when combining sessions and cookies, performance tuning, and PKI and X.509?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q86:** Which validation checks prevent trust failures when combining OAuth 2.0 grants, SPIs and extensions, and SAML interoperability?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q87:** Which validation checks prevent trust failures when combining OpenID Connect, IAM and PKI convergence, and user federation?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q88:** Which validation checks prevent trust failures when combining JWT validation, incident response, and reverse proxies and gateways?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q89:** Which validation checks prevent trust failures when combining SAML interoperability, LDAP directories, and configuration as code?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q90:** Which validation checks prevent trust failures when combining PKCE DPoP mTLS FAPI, sessions and cookies, and incident response?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q91:** Which validation checks prevent trust failures when combining Keycloak internals, JWT validation, and PKI and X.509?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q92:** Which validation checks prevent trust failures when combining realms and scopes, Keycloak internals, and SAML interoperability?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q93:** Which validation checks prevent trust failures when combining authentication flows and MFA, user federation, and user federation?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q94:** Which validation checks prevent trust failures when combining user federation, deployment patterns, and reverse proxies and gateways?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q95:** Which validation checks prevent trust failures when combining identity brokering, performance tuning, and configuration as code?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q96:** Which validation checks prevent trust failures when combining authorization services UMA, SPIs and extensions, and incident response?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q97:** Which validation checks prevent trust failures when combining deployment patterns, IAM and PKI convergence, and PKI and X.509?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q98:** Which validation checks prevent trust failures when combining HA and multi-site, incident response, and SAML interoperability?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q99:** Which validation checks prevent trust failures when combining reverse proxies and gateways, LDAP directories, and user federation?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+- **Q100:** Which validation checks prevent trust failures when combining performance tuning, sessions and cookies, and reverse proxies and gateways?
+  **Expected answer:** Cover issuer or certificate trust, audience or scope checks, replay controls, and explicit ownership for mappers or policies.
+
+**Senior (101-150)**
+
+- **Q101:** How would you design a production rollout that integrates IAM fundamentals with JWT validation under user federation constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q102:** How would you design a production rollout that integrates LDAP directories with Keycloak internals under reverse proxies and gateways constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q103:** How would you design a production rollout that integrates Kerberos and NTLM with user federation under configuration as code constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q104:** How would you design a production rollout that integrates PKI and X.509 with deployment patterns under incident response constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q105:** How would you design a production rollout that integrates sessions and cookies with performance tuning under PKI and X.509 constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q106:** How would you design a production rollout that integrates OAuth 2.0 grants with SPIs and extensions under SAML interoperability constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q107:** How would you design a production rollout that integrates OpenID Connect with IAM and PKI convergence under user federation constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q108:** How would you design a production rollout that integrates JWT validation with incident response under reverse proxies and gateways constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q109:** How would you design a production rollout that integrates SAML interoperability with LDAP directories under configuration as code constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q110:** How would you design a production rollout that integrates PKCE DPoP mTLS FAPI with sessions and cookies under incident response constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q111:** How would you design a production rollout that integrates Keycloak internals with JWT validation under PKI and X.509 constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q112:** How would you design a production rollout that integrates realms and scopes with Keycloak internals under SAML interoperability constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q113:** How would you design a production rollout that integrates authentication flows and MFA with user federation under user federation constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q114:** How would you design a production rollout that integrates user federation with deployment patterns under reverse proxies and gateways constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q115:** How would you design a production rollout that integrates identity brokering with performance tuning under configuration as code constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q116:** How would you design a production rollout that integrates authorization services UMA with SPIs and extensions under incident response constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q117:** How would you design a production rollout that integrates deployment patterns with IAM and PKI convergence under PKI and X.509 constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q118:** How would you design a production rollout that integrates HA and multi-site with incident response under SAML interoperability constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q119:** How would you design a production rollout that integrates reverse proxies and gateways with LDAP directories under user federation constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q120:** How would you design a production rollout that integrates performance tuning with sessions and cookies under reverse proxies and gateways constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q121:** How would you design a production rollout that integrates observability and SIEM with JWT validation under configuration as code constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q122:** How would you design a production rollout that integrates upgrade and disaster recovery with Keycloak internals under incident response constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q123:** How would you design a production rollout that integrates SPIs and extensions with user federation under PKI and X.509 constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q124:** How would you design a production rollout that integrates configuration as code with deployment patterns under SAML interoperability constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q125:** How would you design a production rollout that integrates legacy migration with performance tuning under user federation constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q126:** How would you design a production rollout that integrates IAM and PKI convergence with SPIs and extensions under reverse proxies and gateways constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q127:** How would you design a production rollout that integrates vendor comparison with IAM and PKI convergence under configuration as code constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q128:** How would you design a production rollout that integrates hands-on labs with incident response under incident response constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q129:** How would you design a production rollout that integrates incident response with LDAP directories under PKI and X.509 constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q130:** How would you design a production rollout that integrates architecture case studies with sessions and cookies under SAML interoperability constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q131:** How would you design a production rollout that integrates IAM fundamentals with JWT validation under user federation constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q132:** How would you design a production rollout that integrates LDAP directories with Keycloak internals under reverse proxies and gateways constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q133:** How would you design a production rollout that integrates Kerberos and NTLM with user federation under configuration as code constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q134:** How would you design a production rollout that integrates PKI and X.509 with deployment patterns under incident response constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q135:** How would you design a production rollout that integrates sessions and cookies with performance tuning under PKI and X.509 constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q136:** How would you design a production rollout that integrates OAuth 2.0 grants with SPIs and extensions under SAML interoperability constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q137:** How would you design a production rollout that integrates OpenID Connect with IAM and PKI convergence under user federation constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q138:** How would you design a production rollout that integrates JWT validation with incident response under reverse proxies and gateways constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q139:** How would you design a production rollout that integrates SAML interoperability with LDAP directories under configuration as code constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q140:** How would you design a production rollout that integrates PKCE DPoP mTLS FAPI with sessions and cookies under incident response constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q141:** How would you design a production rollout that integrates Keycloak internals with JWT validation under PKI and X.509 constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q142:** How would you design a production rollout that integrates realms and scopes with Keycloak internals under SAML interoperability constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q143:** How would you design a production rollout that integrates authentication flows and MFA with user federation under user federation constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q144:** How would you design a production rollout that integrates user federation with deployment patterns under reverse proxies and gateways constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q145:** How would you design a production rollout that integrates identity brokering with performance tuning under configuration as code constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q146:** How would you design a production rollout that integrates authorization services UMA with SPIs and extensions under incident response constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q147:** How would you design a production rollout that integrates deployment patterns with IAM and PKI convergence under PKI and X.509 constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q148:** How would you design a production rollout that integrates HA and multi-site with incident response under SAML interoperability constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q149:** How would you design a production rollout that integrates reverse proxies and gateways with LDAP directories under user federation constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+- **Q150:** How would you design a production rollout that integrates performance tuning with sessions and cookies under reverse proxies and gateways constraints?
+  **Expected answer:** Define architecture boundaries, migration waves, rollback criteria, observability gates, and security controls before cutover.
+
+**Expert (151-200)**
+
+- **Q151:** During a major outage, how do you triage cross-domain failures involving IAM fundamentals, JWT validation, and user federation?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q152:** During a major outage, how do you triage cross-domain failures involving LDAP directories, Keycloak internals, and reverse proxies and gateways?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q153:** During a major outage, how do you triage cross-domain failures involving Kerberos and NTLM, user federation, and configuration as code?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q154:** During a major outage, how do you triage cross-domain failures involving PKI and X.509, deployment patterns, and incident response?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q155:** During a major outage, how do you triage cross-domain failures involving sessions and cookies, performance tuning, and PKI and X.509?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q156:** During a major outage, how do you triage cross-domain failures involving OAuth 2.0 grants, SPIs and extensions, and SAML interoperability?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q157:** During a major outage, how do you triage cross-domain failures involving OpenID Connect, IAM and PKI convergence, and user federation?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q158:** During a major outage, how do you triage cross-domain failures involving JWT validation, incident response, and reverse proxies and gateways?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q159:** During a major outage, how do you triage cross-domain failures involving SAML interoperability, LDAP directories, and configuration as code?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q160:** During a major outage, how do you triage cross-domain failures involving PKCE DPoP mTLS FAPI, sessions and cookies, and incident response?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q161:** During a major outage, how do you triage cross-domain failures involving Keycloak internals, JWT validation, and PKI and X.509?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q162:** During a major outage, how do you triage cross-domain failures involving realms and scopes, Keycloak internals, and SAML interoperability?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q163:** During a major outage, how do you triage cross-domain failures involving authentication flows and MFA, user federation, and user federation?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q164:** During a major outage, how do you triage cross-domain failures involving user federation, deployment patterns, and reverse proxies and gateways?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q165:** During a major outage, how do you triage cross-domain failures involving identity brokering, performance tuning, and configuration as code?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q166:** During a major outage, how do you triage cross-domain failures involving authorization services UMA, SPIs and extensions, and incident response?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q167:** During a major outage, how do you triage cross-domain failures involving deployment patterns, IAM and PKI convergence, and PKI and X.509?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q168:** During a major outage, how do you triage cross-domain failures involving HA and multi-site, incident response, and SAML interoperability?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q169:** During a major outage, how do you triage cross-domain failures involving reverse proxies and gateways, LDAP directories, and user federation?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q170:** During a major outage, how do you triage cross-domain failures involving performance tuning, sessions and cookies, and reverse proxies and gateways?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q171:** During a major outage, how do you triage cross-domain failures involving observability and SIEM, JWT validation, and configuration as code?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q172:** During a major outage, how do you triage cross-domain failures involving upgrade and disaster recovery, Keycloak internals, and incident response?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q173:** During a major outage, how do you triage cross-domain failures involving SPIs and extensions, user federation, and PKI and X.509?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q174:** During a major outage, how do you triage cross-domain failures involving configuration as code, deployment patterns, and SAML interoperability?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q175:** During a major outage, how do you triage cross-domain failures involving legacy migration, performance tuning, and user federation?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q176:** During a major outage, how do you triage cross-domain failures involving IAM and PKI convergence, SPIs and extensions, and reverse proxies and gateways?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q177:** During a major outage, how do you triage cross-domain failures involving vendor comparison, IAM and PKI convergence, and configuration as code?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q178:** During a major outage, how do you triage cross-domain failures involving hands-on labs, incident response, and incident response?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q179:** During a major outage, how do you triage cross-domain failures involving incident response, LDAP directories, and PKI and X.509?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q180:** During a major outage, how do you triage cross-domain failures involving architecture case studies, sessions and cookies, and SAML interoperability?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q181:** During a major outage, how do you triage cross-domain failures involving IAM fundamentals, JWT validation, and user federation?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q182:** During a major outage, how do you triage cross-domain failures involving LDAP directories, Keycloak internals, and reverse proxies and gateways?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q183:** During a major outage, how do you triage cross-domain failures involving Kerberos and NTLM, user federation, and configuration as code?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q184:** During a major outage, how do you triage cross-domain failures involving PKI and X.509, deployment patterns, and incident response?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q185:** During a major outage, how do you triage cross-domain failures involving sessions and cookies, performance tuning, and PKI and X.509?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q186:** During a major outage, how do you triage cross-domain failures involving OAuth 2.0 grants, SPIs and extensions, and SAML interoperability?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q187:** During a major outage, how do you triage cross-domain failures involving OpenID Connect, IAM and PKI convergence, and user federation?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q188:** During a major outage, how do you triage cross-domain failures involving JWT validation, incident response, and reverse proxies and gateways?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q189:** During a major outage, how do you triage cross-domain failures involving SAML interoperability, LDAP directories, and configuration as code?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q190:** During a major outage, how do you triage cross-domain failures involving PKCE DPoP mTLS FAPI, sessions and cookies, and incident response?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q191:** During a major outage, how do you triage cross-domain failures involving Keycloak internals, JWT validation, and PKI and X.509?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q192:** During a major outage, how do you triage cross-domain failures involving realms and scopes, Keycloak internals, and SAML interoperability?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q193:** During a major outage, how do you triage cross-domain failures involving authentication flows and MFA, user federation, and user federation?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q194:** During a major outage, how do you triage cross-domain failures involving user federation, deployment patterns, and reverse proxies and gateways?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q195:** During a major outage, how do you triage cross-domain failures involving identity brokering, performance tuning, and configuration as code?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q196:** During a major outage, how do you triage cross-domain failures involving authorization services UMA, SPIs and extensions, and incident response?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q197:** During a major outage, how do you triage cross-domain failures involving deployment patterns, IAM and PKI convergence, and PKI and X.509?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q198:** During a major outage, how do you triage cross-domain failures involving HA and multi-site, incident response, and SAML interoperability?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q199:** During a major outage, how do you triage cross-domain failures involving reverse proxies and gateways, LDAP directories, and user federation?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
+
+- **Q200:** During a major outage, how do you triage cross-domain failures involving performance tuning, sessions and cookies, and reverse proxies and gateways?
+  **Expected answer:** Stabilize impact, correlate logs and metrics by request path, isolate the failing trust boundary, apply lowest-risk mitigation, and document corrective design actions.
 ## 31.8 Summary
 
 * 200+ interview questions with expected answers needs explicit control-plane decisions before runtime tuning.
