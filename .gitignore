@@ -1,0 +1,7 @@
+# Generated build artifacts (regenerate via convert.ps1 / VS Code tasks)
+*.html
+*.pdf
+
+# OS / editor junk
+Thumbs.db
+.DS_Store
