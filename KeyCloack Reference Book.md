@@ -679,120 +679,116 @@ Every acronym used in this chapter, defined in place so the chapter can be read 
 ---
 
 
+
 # Chapter 2 — Directories, LDAP and X.500
 
 > **Objectives of this chapter**
-> By the end of it you will be able to: explain why this domain exists in enterprise IAM, use precise vocabulary when designing with Keycloak, map the topic to production controls, diagnose common failure patterns, and answer graded interview questions with architecture-level trade-off reasoning.
+> Explain directory data modeling, LDAP protocol operations, schema design, replication semantics, and safe Keycloak federation with LDAP/AD.
 
-## 2.1 Why this chapter matters before implementation
+## 2.1 Why this topic exists (before how)
 
-Directories exist because identity data has very different read/write patterns from transactional business data: high read fan-out, strict lookup semantics, and hierarchical delegated administration. In interviews and production reviews, this topic is usually the boundary between configuration knowledge and architecture accountability: if the underlying rationale is weak, the resulting security model is brittle even when syntax is correct.
+LDAP survived because IAM directories optimize for very high read volume, hierarchical delegation, and predictable lookup semantics rather than relational joins. X.500 introduced the naming and schema model; LDAP made it operationally lighter for TCP/IP networks.
 
-The design principle used in this book remains the same: define trust boundaries, failure modes and ownership first; only then choose Keycloak settings, adapters, proxies or automation patterns. In Keycloak, LDAP federation configuration should be treated as a contract: bind identity, search base, object classes, mapper ownership and sync direction must be explicit before first sync.
+## 2.2 Core mechanisms and architecture decisions
 
-## 2.2 Core model and terminology
+* DIT structure: root, domains, OUs, leaf entries; DN is identity path, not business key.
+* Protocol primitives: Bind, Search, Compare, Modify, Add, Delete, ModifyDN with server-side controls (paging, sorting).
+* Schema governance: objectClass defines allowed/required attributes; extending schema without lifecycle ownership creates drift.
+* Keycloak federation: LDAP is often source of credentials and groups; mapper precedence decides claim truth.
 
-The useful way to reason is to separate **control plane** from **runtime plane**. The control plane defines identities, credentials, policies and metadata ownership. The runtime plane carries protocol exchanges and enforcement decisions under latency and failure constraints. Many outages come from mixing the two and assuming runtime can fix control-plane ambiguity.
+## 2.3 Chapter schema
 
-For this chapter, keep three questions in scope: who is authoritative, what is cryptographically trusted, and where decisions are enforced. If one of these answers is implicit, incident response will be slower and audit evidence will be weaker.
-
-## 2.3 Keycloak implementation perspective
-
-Keycloak should be used as a deterministic trust service, not a collection of ad-hoc toggles. Start with a written contract (issuers, audiences, key material, lifecycle rules, mapper ownership), then encode it consistently in realms, clients, flows and automation.
-
-Operationally, introduce changes with rollback posture: canary realm/client changes, measurable acceptance criteria, and explicit compatibility windows for dependent applications. Security-sensitive defaults should be enforced centrally and reviewed through pull requests rather than direct console edits.
-
-## 2.4 Architecture schema
-
-Schema 2.1 — Control plane and runtime plane for chapter 2
+Schema 2.1 — Directories, LDAP and X.500: control and runtime path
 
 ```mermaid
 flowchart TB
     subgraph CP[Control plane]
         direction TB
-        P[Policy and metadata]
-        I[Identity and credentials]
-        K[Key and trust material]
-        P --> I
-        I --> K
+        A[Directories, LDAP and X.500]
+        B[Policy and configuration]
+        C[Identity and trust data]
+        A --> B
+        B --> C
     end
 
     subgraph RP[Runtime plane]
         direction TB
-        C[Client or subject]
-        KC[Keycloak trust service]
-        E[Enforcement point]
-        R[Protected resource]
-        C --> KC
-        KC --> E
-        E --> R
+        D[Client or workload]
+        E[Keycloak]
+        F[Gateway or relying party]
+        G[Protected service]
+        D --> E
+        E --> F
+        F --> G
     end
 
     CP --> RP
 ```
 
-## 2.5 Production notes
+## 2.4 Production notes
 
 **Common mistakes**
 
-* Deploying configuration before clarifying authoritative ownership of identities, claims or policies.
-* Accepting default protocol/library behavior without explicit validation requirements.
-* Treating this topic as a one-time setup instead of an operational lifecycle.
+* Using broad subtree searches without indexed attributes, causing authentication spikes.
+* Bi-directional writes for attributes already mastered in HR/AD, creating race conditions.
+* Recursive group resolution without limits, causing huge token group claims.
 
 **Best practices**
 
-* Define trust, ownership and rollback criteria in writing before rollout.
-* Measure runtime behavior with explicit SLO-oriented signals tied to this chapter's control points.
-* Rehearse failure drills that include both technical and governance decisions.
+* Index login-critical attributes (`uid`, `mail`, `memberOf`) and validate query plans.
+* Document attribute ownership (HR, AD, Keycloak mapper) before enabling import or write-back.
+* Use paged searches and delta sync windows sized to directory capacity.
 
 **Security implications**
 
-Misconfiguration in this area usually creates silent over-trust: tokens accepted in the wrong context, stale identity data, weak assurance reuse, or unverified delegation. These are high-impact because they often preserve application availability while degrading security invisibly.
+A compromised LDAP bind account exposes identity metadata at scale. Use least-privilege bind DN, TLS with certificate validation, and distinct accounts for read vs write operations.
 
 **Performance implications**
 
-Performance risk comes from hidden remote dependencies and repeated validation work. Cache strategy, timeout policy and token/session lifetimes must be tuned together; otherwise, peak load amplifies control-plane ambiguity into runtime saturation.
+Latency is usually directory-bound, not Keycloak-bound. Deep group trees and unindexed filters inflate search time and token issuance latency.
 
-## 2.6 Troubleshooting
+## 2.5 Troubleshooting
 
-If login latency spikes after LDAP integration, inspect bind account limits, paged search settings and group mapper recursion depth before scaling Keycloak. Build troubleshooting as a layered checklist: protocol correctness, cryptographic validation, policy evaluation, then infrastructure health. This ordering avoids premature scaling or unsafe hotfixes.
+* Check bind success and TLS trust first (`ldapsearch -ZZ` equivalent connectivity tests).
+* Capture real search filters from Keycloak logs and validate against directory indexes.
+* If sync stalls, inspect pagination control support and server size/time limits.
 
-## 2.7 Common misconceptions
+## 2.6 Common misconceptions
 
-* LDAP is not a generic relational database replacement; it is an optimized directory protocol with distinct consistency and schema trade-offs.
-* "If it works in a demo, it is production-ready" — false; production requires resilience, observability and governance evidence.
-* "One successful login proves the design" — false; architecture quality is proven across lifecycle events, failure events and audit replay.
+* LDAP is a database replacement for everything.
+* DN is immutable forever; in reality rename/move operations happen during org changes.
+* Import users once means federation complexity is solved.
 
-## 2.8 Interview questions
+## 2.7 Interview questions (graded)
 
 **Beginner**
 
-1. What business problem does this chapter's topic solve in IAM?
-2. Which component in Keycloak is most directly involved?
+- **Q:** Why do enterprises still run LDAP/AD for IAM?
+- **Expected answer:** Because directory data model and read patterns fit identity workloads better than transactional schemas.
 
 **Intermediate**
 
-3. Which trust boundary is easiest to misconfigure here, and why?
-4. What telemetry would you add to detect failure early?
+- **Q:** How do subtree search scope and filter indexing affect login latency?
+- **Expected answer:** Unindexed subtree filters force scans; indexed filters keep authentication predictable under load.
 
 **Senior**
 
-5. How would you design this area for high assurance without breaking developer velocity?
-6. Which trade-offs would you document for auditors and platform owners?
+- **Q:** When would you use import mode vs live federation in Keycloak?
+- **Expected answer:** Import for resilience/offline reads; live federation for freshest attributes, with explicit cache and outage strategy.
 
 **Expert**
 
-7. Describe a failure mode that remains "green" on infrastructure dashboards but is security-critical.
-8. How would you prove remediation quality after a major incident linked to this domain?
+- **Q:** Design a safe group-to-role mapping strategy for 100k users.
+- **Expected answer:** Constrain recursion, normalize group semantics, and map only authorization-relevant groups to avoid token bloat.
 
-## 2.9 Summary
+## 2.8 Summary
 
-* This chapter's domain is fundamentally about explicit trust and ownership, not only feature enablement.
-* Keycloak implementation quality depends on mapping control-plane clarity to runtime enforcement.
-* Security and performance outcomes are coupled; both must be designed and measured together.
-* Troubleshooting quality improves dramatically when protocol, policy and infrastructure checks are ordered deliberately.
+* LDAP/X.500 decisions are data-governance decisions before being connector settings.
+* Search/index design directly impacts auth latency.
+* Federation requires explicit ownership of attributes and groups.
+* Directory security posture is tier-0 for IAM.
 
-## 2.10 References
+## 2.9 References
 
 * RFC 4511
 * RFC 4512
@@ -803,722 +799,692 @@ If login latency spikes after LDAP integration, inspect bind account limits, pag
 # Chapter 3 — Kerberos, NTLM and legacy enterprise SSO
 
 > **Objectives of this chapter**
-> By the end of it you will be able to: explain why this domain exists in enterprise IAM, use precise vocabulary when designing with Keycloak, map the topic to production controls, diagnose common failure patterns, and answer graded interview questions with architecture-level trade-off reasoning.
+> Explain Kerberos ticket flow, NTLM limitations, and coexistence patterns while modernizing to OIDC with Keycloak.
 
-## 3.1 Why this chapter matters before implementation
+## 3.1 Why this topic exists (before how)
 
-Legacy SSO protocols still matter because many enterprise estates keep mission-critical Windows and intranet systems that cannot move to OIDC in one project wave. In interviews and production reviews, this topic is usually the boundary between configuration knowledge and architecture accountability: if the underlying rationale is weak, the resulting security model is brittle even when syntax is correct.
+Enterprises keep Kerberos because integrated Windows authentication gives seamless SSO for domain-joined devices. NTLM persists in legacy paths, but its relay resistance and cryptographic posture are weaker than Kerberos.
 
-The design principle used in this book remains the same: define trust boundaries, failure modes and ownership first; only then choose Keycloak settings, adapters, proxies or automation patterns. In mixed estates, Keycloak usually fronts modern apps while Kerberos/NTLM remain behind AD-integrated apps; transition architecture must preserve SSO continuity across both worlds.
+## 3.2 Core mechanisms and architecture decisions
 
-## 3.2 Core model and terminology
+* Kerberos flow: AS-REQ/AS-REP for TGT, TGS-REQ/TGS-REP for service ticket, AP exchange for service access.
+* SPN correctness is mandatory; duplicates break service ticket resolution.
+* Clock skew tolerance is strict; NTP drift creates intermittent auth failure.
+* Modern pattern: keep Kerberos at workstation edge, use Keycloak broker/adapters for OIDC-facing apps.
 
-The useful way to reason is to separate **control plane** from **runtime plane**. The control plane defines identities, credentials, policies and metadata ownership. The runtime plane carries protocol exchanges and enforcement decisions under latency and failure constraints. Many outages come from mixing the two and assuming runtime can fix control-plane ambiguity.
+## 3.3 Chapter schema
 
-For this chapter, keep three questions in scope: who is authoritative, what is cryptographically trusted, and where decisions are enforced. If one of these answers is implicit, incident response will be slower and audit evidence will be weaker.
-
-## 3.3 Keycloak implementation perspective
-
-Keycloak should be used as a deterministic trust service, not a collection of ad-hoc toggles. Start with a written contract (issuers, audiences, key material, lifecycle rules, mapper ownership), then encode it consistently in realms, clients, flows and automation.
-
-Operationally, introduce changes with rollback posture: canary realm/client changes, measurable acceptance criteria, and explicit compatibility windows for dependent applications. Security-sensitive defaults should be enforced centrally and reviewed through pull requests rather than direct console edits.
-
-## 3.4 Architecture schema
-
-Schema 3.1 — Control plane and runtime plane for chapter 3
+Schema 3.1 — Kerberos, NTLM and legacy enterprise SSO: control and runtime path
 
 ```mermaid
 flowchart TB
     subgraph CP[Control plane]
         direction TB
-        P[Policy and metadata]
-        I[Identity and credentials]
-        K[Key and trust material]
-        P --> I
-        I --> K
+        A[Kerberos, NTLM and legacy enterprise SSO]
+        B[Policy and configuration]
+        C[Identity and trust data]
+        A --> B
+        B --> C
     end
 
     subgraph RP[Runtime plane]
         direction TB
-        C[Client or subject]
-        KC[Keycloak trust service]
-        E[Enforcement point]
-        R[Protected resource]
-        C --> KC
-        KC --> E
-        E --> R
+        D[Client or workload]
+        E[Keycloak]
+        F[Gateway or relying party]
+        G[Protected service]
+        D --> E
+        E --> F
+        F --> G
     end
 
     CP --> RP
 ```
 
-## 3.5 Production notes
+## 3.4 Production notes
 
 **Common mistakes**
 
-* Deploying configuration before clarifying authoritative ownership of identities, claims or policies.
-* Accepting default protocol/library behavior without explicit validation requirements.
-* Treating this topic as a one-time setup instead of an operational lifecycle.
+* Treating NTLM fallback as harmless; attackers exploit relay opportunities.
+* Ignoring DNS canonicalization/SPN registration in multi-host services.
+* Assuming browser SSO failures are app bugs instead of domain trust/policy issues.
 
 **Best practices**
 
-* Define trust, ownership and rollback criteria in writing before rollout.
-* Measure runtime behavior with explicit SLO-oriented signals tied to this chapter's control points.
-* Rehearse failure drills that include both technical and governance decisions.
+* Prefer Kerberos-only where possible; disable NTLM where business constraints allow.
+* Track SPN inventory as configuration-as-code to prevent duplicates.
+* Use constrained delegation intentionally; review delegation trust boundaries.
 
 **Security implications**
 
-Misconfiguration in this area usually creates silent over-trust: tokens accepted in the wrong context, stale identity data, weak assurance reuse, or unverified delegation. These are high-impact because they often preserve application availability while degrading security invisibly.
+Kerberos tickets are bearer-like within their trust context; ticket theft and unconstrained delegation can become lateral-movement accelerators.
 
 **Performance implications**
 
-Performance risk comes from hidden remote dependencies and repeated validation work. Cache strategy, timeout policy and token/session lifetimes must be tuned together; otherwise, peak load amplifies control-plane ambiguity into runtime saturation.
+KDC dependency creates sharp blast radius: KDC latency or packet loss appears as global login slowdown.
 
-## 3.6 Troubleshooting
+## 3.5 Troubleshooting
 
-When integrated SSO fails intermittently, verify SPN registration, clock skew and DNS canonicalization before blaming protocol libraries. Build troubleshooting as a layered checklist: protocol correctness, cryptographic validation, policy evaluation, then infrastructure health. This ordering avoids premature scaling or unsafe hotfixes.
+* If only some users fail, compare workstation time sync and domain trust path.
+* Validate SPN uniqueness and service account key material after password rotation.
+* Capture `WWW-Authenticate` negotiation headers to detect NTLM fallback unexpectedly.
 
-## 3.7 Common misconceptions
+## 3.6 Common misconceptions
 
-* Kerberos is not obsolete; it remains foundational in AD-backed SSO even when user-facing apps move to OIDC.
-* "If it works in a demo, it is production-ready" — false; production requires resilience, observability and governance evidence.
-* "One successful login proves the design" — false; architecture quality is proven across lifecycle events, failure events and audit replay.
+* Kerberos is obsolete and can be removed quickly.
+* NTLM and Kerberos are equivalent from a security standpoint.
+* OIDC migration removes need to understand domain auth internals.
 
-## 3.8 Interview questions
+## 3.7 Interview questions (graded)
 
 **Beginner**
 
-1. What business problem does this chapter's topic solve in IAM?
-2. Which component in Keycloak is most directly involved?
+- **Q:** What problem does Kerberos solve better than password re-entry?
+- **Expected answer:** Mutual trust-based SSO without sending passwords to each service.
 
 **Intermediate**
 
-3. Which trust boundary is easiest to misconfigure here, and why?
-4. What telemetry would you add to detect failure early?
+- **Q:** Why does clock skew break Kerberos more than many web protocols?
+- **Expected answer:** Tickets contain strict validity windows and replay protections tied to time.
 
 **Senior**
 
-5. How would you design this area for high assurance without breaking developer velocity?
-6. Which trade-offs would you document for auditors and platform owners?
+- **Q:** How do you modernize while preserving intranet SSO?
+- **Expected answer:** Keep Kerberos at edge, federate/broker into OIDC, and migrate apps by trust boundary.
 
 **Expert**
 
-7. Describe a failure mode that remains "green" on infrastructure dashboards but is security-critical.
-8. How would you prove remediation quality after a major incident linked to this domain?
+- **Q:** What is the risk profile of keeping NTLM enabled for fallback?
+- **Expected answer:** Relay and downgrade paths increase; it should be explicitly constrained and monitored.
 
-## 3.9 Summary
+## 3.8 Summary
 
-* This chapter's domain is fundamentally about explicit trust and ownership, not only feature enablement.
-* Keycloak implementation quality depends on mapping control-plane clarity to runtime enforcement.
-* Security and performance outcomes are coupled; both must be designed and measured together.
-* Troubleshooting quality improves dramatically when protocol, policy and infrastructure checks are ordered deliberately.
+* Kerberos remains operationally critical in AD estates.
+* SPN/time/DNS hygiene determines reliability.
+* NTLM fallback must be treated as risk, not convenience.
+* Migration strategy should separate user UX continuity from protocol backend evolution.
 
-## 3.10 References
+## 3.9 References
 
 * RFC 4120
-* MS-NLMP
 * RFC 4559
-* SPNEGO RFC 4178
+* RFC 4178
+* MS-NLMP
 
 
 # Chapter 4 — PKI, X.509 and cryptographic trust
 
 > **Objectives of this chapter**
-> By the end of it you will be able to: explain why this domain exists in enterprise IAM, use precise vocabulary when designing with Keycloak, map the topic to production controls, diagnose common failure patterns, and answer graded interview questions with architecture-level trade-off reasoning.
+> Explain certificate chains, key lifecycle, revocation models, and how Keycloak trust anchors affect token and TLS security.
 
-## 4.1 Why this chapter matters before implementation
+## 4.1 Why this topic exists (before how)
 
-PKI is the trust substrate behind federation signatures, TLS and key rollover; without it, OAuth and OIDC are only unauthenticated JSON exchanges. In interviews and production reviews, this topic is usually the boundary between configuration knowledge and architecture accountability: if the underlying rationale is weak, the resulting security model is brittle even when syntax is correct.
+Identity protocols are only trustworthy if signature and TLS trust are trustworthy. PKI operational quality—not just math—decides whether issuers, endpoints, and keys are actually authentic.
 
-The design principle used in this book remains the same: define trust boundaries, failure modes and ownership first; only then choose Keycloak settings, adapters, proxies or automation patterns. Operationally, this means enforcing algorithm policy, disciplined key rotation, certificate lifecycle automation and auditable trust-store management.
+## 4.2 Core mechanisms and architecture decisions
 
-## 4.2 Core model and terminology
+* X.509 chain building: leaf -> intermediate -> root; trust anchor is local trust store.
+* Key usage and extended key usage constrain certificate purpose (server auth, client auth, signing).
+* Revocation posture: OCSP/CRL soft-fail vs hard-fail has availability and security trade-offs.
+* Keycloak uses PKI for HTTPS endpoints and for distributing token verification keys (JWKS trust bootstrap).
 
-The useful way to reason is to separate **control plane** from **runtime plane**. The control plane defines identities, credentials, policies and metadata ownership. The runtime plane carries protocol exchanges and enforcement decisions under latency and failure constraints. Many outages come from mixing the two and assuming runtime can fix control-plane ambiguity.
+## 4.3 Chapter schema
 
-For this chapter, keep three questions in scope: who is authoritative, what is cryptographically trusted, and where decisions are enforced. If one of these answers is implicit, incident response will be slower and audit evidence will be weaker.
-
-## 4.3 Keycloak implementation perspective
-
-Keycloak should be used as a deterministic trust service, not a collection of ad-hoc toggles. Start with a written contract (issuers, audiences, key material, lifecycle rules, mapper ownership), then encode it consistently in realms, clients, flows and automation.
-
-Operationally, introduce changes with rollback posture: canary realm/client changes, measurable acceptance criteria, and explicit compatibility windows for dependent applications. Security-sensitive defaults should be enforced centrally and reviewed through pull requests rather than direct console edits.
-
-## 4.4 Architecture schema
-
-Schema 4.1 — Control plane and runtime plane for chapter 4
+Schema 4.1 — PKI, X.509 and cryptographic trust: control and runtime path
 
 ```mermaid
 flowchart TB
     subgraph CP[Control plane]
         direction TB
-        P[Policy and metadata]
-        I[Identity and credentials]
-        K[Key and trust material]
-        P --> I
-        I --> K
+        A[PKI, X.509 and cryptographic trust]
+        B[Policy and configuration]
+        C[Identity and trust data]
+        A --> B
+        B --> C
     end
 
     subgraph RP[Runtime plane]
         direction TB
-        C[Client or subject]
-        KC[Keycloak trust service]
-        E[Enforcement point]
-        R[Protected resource]
-        C --> KC
-        KC --> E
-        E --> R
+        D[Client or workload]
+        E[Keycloak]
+        F[Gateway or relying party]
+        G[Protected service]
+        D --> E
+        E --> F
+        F --> G
     end
 
     CP --> RP
 ```
 
-## 4.5 Production notes
+## 4.4 Production notes
 
 **Common mistakes**
 
-* Deploying configuration before clarifying authoritative ownership of identities, claims or policies.
-* Accepting default protocol/library behavior without explicit validation requirements.
-* Treating this topic as a one-time setup instead of an operational lifecycle.
+* Mixing internal test CAs and production trust stores.
+* Rotating signing keys without overlap period, breaking token verification.
+* Ignoring certificate SAN mismatches behind proxies.
 
 **Best practices**
 
-* Define trust, ownership and rollback criteria in writing before rollout.
-* Measure runtime behavior with explicit SLO-oriented signals tied to this chapter's control points.
-* Rehearse failure drills that include both technical and governance decisions.
+* Use staged key rotation with overlapping JWKS publication windows.
+* Separate CA hierarchy for workload TLS vs human-facing public endpoints when needed.
+* Audit trust store changes like privileged code changes.
 
 **Security implications**
 
-Misconfiguration in this area usually creates silent over-trust: tokens accepted in the wrong context, stale identity data, weak assurance reuse, or unverified delegation. These are high-impact because they often preserve application availability while degrading security invisibly.
+If CA private keys or realm signing keys are mishandled, attackers can mint trusted artifacts. HSM-backed custody and dual-control operations are justified for high-assurance realms.
 
 **Performance implications**
 
-Performance risk comes from hidden remote dependencies and repeated validation work. Cache strategy, timeout policy and token/session lifetimes must be tuned together; otherwise, peak load amplifies control-plane ambiguity into runtime saturation.
+Hard-fail revocation checks can increase latency or outages if OCSP path is unstable; design cache and responder resilience explicitly.
 
-## 4.6 Troubleshooting
+## 4.5 Troubleshooting
 
-For trust failures, test chain building and revocation endpoints from the runtime network path, not only from an administrator workstation. Build troubleshooting as a layered checklist: protocol correctness, cryptographic validation, policy evaluation, then infrastructure health. This ordering avoids premature scaling or unsafe hotfixes.
+* When TLS fails unexpectedly, inspect chain order and SAN first, then cipher policy.
+* For JWT verification failures after rotation, compare `kid` presence and JWKS cache TTL at gateways.
+* Test OCSP/CRL reachability from runtime network segment, not only admin laptop.
 
-## 4.7 Common misconceptions
+## 4.6 Common misconceptions
 
-* A valid certificate chain is not sufficient alone; name constraints, EKU, revocation posture and trust-anchor hygiene still matter.
-* "If it works in a demo, it is production-ready" — false; production requires resilience, observability and governance evidence.
-* "One successful login proves the design" — false; architecture quality is proven across lifecycle events, failure events and audit replay.
+* Having HTTPS enabled means PKI is solved.
+* Self-signed certificates are fine if "internal".
+* Revocation can be ignored because cert expiry exists.
 
-## 4.8 Interview questions
+## 4.7 Interview questions (graded)
 
 **Beginner**
 
-1. What business problem does this chapter's topic solve in IAM?
-2. Which component in Keycloak is most directly involved?
+- **Q:** What is a trust anchor?
+- **Expected answer:** A root CA certificate explicitly trusted by verifier systems.
 
 **Intermediate**
 
-3. Which trust boundary is easiest to misconfigure here, and why?
-4. What telemetry would you add to detect failure early?
+- **Q:** Why are SAN fields critical now?
+- **Expected answer:** Hostname validation relies on SAN; CN-only assumptions are obsolete.
 
 **Senior**
 
-5. How would you design this area for high assurance without breaking developer velocity?
-6. Which trade-offs would you document for auditors and platform owners?
+- **Q:** How do you rotate Keycloak signing keys safely?
+- **Expected answer:** Publish new key before use, overlap validity, monitor verifiers, then retire old key.
 
 **Expert**
 
-7. Describe a failure mode that remains "green" on infrastructure dashboards but is security-critical.
-8. How would you prove remediation quality after a major incident linked to this domain?
+- **Q:** When do you hard-fail OCSP in IAM paths?
+- **Expected answer:** Only where assurance demands it and responder availability is engineered accordingly.
 
-## 4.9 Summary
+## 4.8 Summary
 
-* This chapter's domain is fundamentally about explicit trust and ownership, not only feature enablement.
-* Keycloak implementation quality depends on mapping control-plane clarity to runtime enforcement.
-* Security and performance outcomes are coupled; both must be designed and measured together.
-* Troubleshooting quality improves dramatically when protocol, policy and infrastructure checks are ordered deliberately.
+* PKI hygiene is an IAM availability and security prerequisite.
+* Key rotation must be designed as a lifecycle with overlap.
+* Trust-store management is a privileged change process.
+* Certificate validation failures are often operational misconfiguration, not cryptographic failure.
 
-## 4.10 References
+## 4.9 References
 
 * RFC 5280
 * RFC 6960
-* RFC 8446
+* RFC 7517
 * NIST SP 800-57
 
 
 # Chapter 5 — Sessions, cookies and the limits of HTTP authentication
 
 > **Objectives of this chapter**
-> By the end of it you will be able to: explain why this domain exists in enterprise IAM, use precise vocabulary when designing with Keycloak, map the topic to production controls, diagnose common failure patterns, and answer graded interview questions with architecture-level trade-off reasoning.
+> Explain browser session mechanics, cookie security attributes, logout semantics, and Keycloak session/token coupling.
 
-## 5.1 Why this chapter matters before implementation
+## 5.1 Why this topic exists (before how)
 
-HTTP is stateless by design, while user interaction is stateful; session technologies are the engineering bridge, but they create replay and fixation risk if poorly scoped. In interviews and production reviews, this topic is usually the boundary between configuration knowledge and architecture accountability: if the underlying rationale is weak, the resulting security model is brittle even when syntax is correct.
+HTTP is stateless, but user journeys are stateful. Sessions are the continuity layer, and insecure cookie/session handling is a direct account-takeover path even when primary authentication is strong.
 
-The design principle used in this book remains the same: define trust boundaries, failure modes and ownership first; only then choose Keycloak settings, adapters, proxies or automation patterns. Keycloak sessions and tokens should be tuned together, because cookie session age, access token TTL and refresh strategy jointly define UX, risk and backend load.
+## 5.2 Core mechanisms and architecture decisions
 
-## 5.2 Core model and terminology
+* Cookie attributes: Secure, HttpOnly, SameSite, Path, Domain; each changes attack surface.
+* Session fixation and replay are lifecycle bugs: session IDs must rotate after auth events.
+* Front-channel vs back-channel logout have different consistency and latency properties.
+* Keycloak session idle/max settings must align with access and refresh token lifetimes.
 
-The useful way to reason is to separate **control plane** from **runtime plane**. The control plane defines identities, credentials, policies and metadata ownership. The runtime plane carries protocol exchanges and enforcement decisions under latency and failure constraints. Many outages come from mixing the two and assuming runtime can fix control-plane ambiguity.
+## 5.3 Chapter schema
 
-For this chapter, keep three questions in scope: who is authoritative, what is cryptographically trusted, and where decisions are enforced. If one of these answers is implicit, incident response will be slower and audit evidence will be weaker.
-
-## 5.3 Keycloak implementation perspective
-
-Keycloak should be used as a deterministic trust service, not a collection of ad-hoc toggles. Start with a written contract (issuers, audiences, key material, lifecycle rules, mapper ownership), then encode it consistently in realms, clients, flows and automation.
-
-Operationally, introduce changes with rollback posture: canary realm/client changes, measurable acceptance criteria, and explicit compatibility windows for dependent applications. Security-sensitive defaults should be enforced centrally and reviewed through pull requests rather than direct console edits.
-
-## 5.4 Architecture schema
-
-Schema 5.1 — Control plane and runtime plane for chapter 5
+Schema 5.1 — Sessions, cookies and the limits of HTTP authentication: control and runtime path
 
 ```mermaid
 flowchart TB
     subgraph CP[Control plane]
         direction TB
-        P[Policy and metadata]
-        I[Identity and credentials]
-        K[Key and trust material]
-        P --> I
-        I --> K
+        A[Sessions, cookies and the limits of HTTP authentication]
+        B[Policy and configuration]
+        C[Identity and trust data]
+        A --> B
+        B --> C
     end
 
     subgraph RP[Runtime plane]
         direction TB
-        C[Client or subject]
-        KC[Keycloak trust service]
-        E[Enforcement point]
-        R[Protected resource]
-        C --> KC
-        KC --> E
-        E --> R
+        D[Client or workload]
+        E[Keycloak]
+        F[Gateway or relying party]
+        G[Protected service]
+        D --> E
+        E --> F
+        F --> G
     end
 
     CP --> RP
 ```
 
-## 5.5 Production notes
+## 5.4 Production notes
 
 **Common mistakes**
 
-* Deploying configuration before clarifying authoritative ownership of identities, claims or policies.
-* Accepting default protocol/library behavior without explicit validation requirements.
-* Treating this topic as a one-time setup instead of an operational lifecycle.
+* Long-lived refresh/session defaults copied from dev to production.
+* Broad cookie domain scope shared across unrelated apps.
+* Assuming logout in one tab instantly revokes all downstream API access.
 
 **Best practices**
 
-* Define trust, ownership and rollback criteria in writing before rollout.
-* Measure runtime behavior with explicit SLO-oriented signals tied to this chapter's control points.
-* Rehearse failure drills that include both technical and governance decisions.
+* Use strict cookie scope and SameSite policy consistent with app topology.
+* Rotate session identifiers after privilege or assurance elevation.
+* Design token revocation expectations clearly: near-real-time vs eventual.
 
 **Security implications**
 
-Misconfiguration in this area usually creates silent over-trust: tokens accepted in the wrong context, stale identity data, weak assurance reuse, or unverified delegation. These are high-impact because they often preserve application availability while degrading security invisibly.
+Session theft often bypasses MFA entirely. Harden browser channel, set secure cookie policy, and monitor anomalous token refresh patterns.
 
 **Performance implications**
 
-Performance risk comes from hidden remote dependencies and repeated validation work. Cache strategy, timeout policy and token/session lifetimes must be tuned together; otherwise, peak load amplifies control-plane ambiguity into runtime saturation.
+Session stores and token introspection can become hot paths during morning bursts; tune caches and idle/max values together.
 
-## 5.6 Troubleshooting
+## 5.5 Troubleshooting
 
-If users are unexpectedly logged out, correlate browser SameSite behavior, proxy header rewriting and Keycloak session idle/max settings. Build troubleshooting as a layered checklist: protocol correctness, cryptographic validation, policy evaluation, then infrastructure health. This ordering avoids premature scaling or unsafe hotfixes.
+* If users log out but APIs still accept tokens, inspect token TTL and introspection/revocation strategy.
+* If SSO loops occur, inspect SameSite and redirect URI/domain mismatch.
+* Correlate proxy header rewriting with Keycloak cookie path/domain generation.
 
-## 5.7 Common misconceptions
+## 5.6 Common misconceptions
 
-* Short token lifetimes do not automatically make sessions safe if cookie scope, rotation and revocation controls are weak.
-* "If it works in a demo, it is production-ready" — false; production requires resilience, observability and governance evidence.
-* "One successful login proves the design" — false; architecture quality is proven across lifecycle events, failure events and audit replay.
+* JWTs eliminate need for session management.
+* Short access tokens alone fully mitigate session risk.
+* Single logout is instant and universal by default.
 
-## 5.8 Interview questions
+## 5.7 Interview questions (graded)
 
 **Beginner**
 
-1. What business problem does this chapter's topic solve in IAM?
-2. Which component in Keycloak is most directly involved?
+- **Q:** Why do we need sessions after login?
+- **Expected answer:** To avoid re-auth on every request while preserving continuity state.
 
 **Intermediate**
 
-3. Which trust boundary is easiest to misconfigure here, and why?
-4. What telemetry would you add to detect failure early?
+- **Q:** What does SameSite protect against?
+- **Expected answer:** Cross-site request contexts that can trigger CSRF-like cookie replay.
 
 **Senior**
 
-5. How would you design this area for high assurance without breaking developer velocity?
-6. Which trade-offs would you document for auditors and platform owners?
+- **Q:** How do you align Keycloak session and token TTLs?
+- **Expected answer:** Model user idle behavior, API trust window, and revocation latency together.
 
 **Expert**
 
-7. Describe a failure mode that remains "green" on infrastructure dashboards but is security-critical.
-8. How would you prove remediation quality after a major incident linked to this domain?
+- **Q:** How would you design near-immediate logout across many APIs?
+- **Expected answer:** Use short AT TTL, refresh revocation, back-channel logout, and gateway revalidation controls.
 
-## 5.9 Summary
+## 5.8 Summary
 
-* This chapter's domain is fundamentally about explicit trust and ownership, not only feature enablement.
-* Keycloak implementation quality depends on mapping control-plane clarity to runtime enforcement.
-* Security and performance outcomes are coupled; both must be designed and measured together.
-* Troubleshooting quality improves dramatically when protocol, policy and infrastructure checks are ordered deliberately.
+* Session design is security design.
+* Cookie scope mistakes create cross-app exposure.
+* Logout semantics must be explicit per channel.
+* Token/session TTL coupling drives UX and risk.
 
-## 5.10 References
+## 5.9 References
 
 * RFC 6265
-* RFC 9110
+* RFC 7009
+* OpenID Back-Channel Logout
 * OWASP Session Management Cheat Sheet
-* RFC 8471
 
 
 # Chapter 6 — OAuth 2.0: delegation, grants and threat model
 
 > **Objectives of this chapter**
-> By the end of it you will be able to: explain why this domain exists in enterprise IAM, use precise vocabulary when designing with Keycloak, map the topic to production controls, diagnose common failure patterns, and answer graded interview questions with architecture-level trade-off reasoning.
+> Explain OAuth actors, grant selection, token security properties, and practical threat mitigations in Keycloak ecosystems.
 
-## 6.1 Why this chapter matters before implementation
+## 6.1 Why this topic exists (before how)
 
-OAuth 2.0 solved delegated access at internet scale, separating user credentials from API permissions and enabling bounded, revocable delegation. In interviews and production reviews, this topic is usually the boundary between configuration knowledge and architecture accountability: if the underlying rationale is weak, the resulting security model is brittle even when syntax is correct.
+OAuth 2.0 was created to avoid password sharing between users and third-party applications. Delegation gives bounded API rights without exposing primary credentials.
 
-The design principle used in this book remains the same: define trust boundaries, failure modes and ownership first; only then choose Keycloak settings, adapters, proxies or automation patterns. Implementation discipline starts with choosing the right grant per client type, minimizing scopes, and validating token audience at every resource server.
+## 6.2 Core mechanisms and architecture decisions
 
-## 6.2 Core model and terminology
+* Actor model: resource owner, client, authorization server, resource server.
+* Grant selection by client trust type: authorization code(+PKCE), client credentials, device code; avoid implicit/ROPC patterns.
+* Scopes represent requested delegation, not entitlement truth by themselves.
+* Threats: code interception, token replay, mix-up, redirect URI abuse, weak audience validation.
 
-The useful way to reason is to separate **control plane** from **runtime plane**. The control plane defines identities, credentials, policies and metadata ownership. The runtime plane carries protocol exchanges and enforcement decisions under latency and failure constraints. Many outages come from mixing the two and assuming runtime can fix control-plane ambiguity.
+## 6.3 Chapter schema
 
-For this chapter, keep three questions in scope: who is authoritative, what is cryptographically trusted, and where decisions are enforced. If one of these answers is implicit, incident response will be slower and audit evidence will be weaker.
-
-## 6.3 Keycloak implementation perspective
-
-Keycloak should be used as a deterministic trust service, not a collection of ad-hoc toggles. Start with a written contract (issuers, audiences, key material, lifecycle rules, mapper ownership), then encode it consistently in realms, clients, flows and automation.
-
-Operationally, introduce changes with rollback posture: canary realm/client changes, measurable acceptance criteria, and explicit compatibility windows for dependent applications. Security-sensitive defaults should be enforced centrally and reviewed through pull requests rather than direct console edits.
-
-## 6.4 Architecture schema
-
-Schema 6.1 — Control plane and runtime plane for chapter 6
+Schema 6.1 — OAuth 2.0: delegation, grants and threat model: control and runtime path
 
 ```mermaid
 flowchart TB
     subgraph CP[Control plane]
         direction TB
-        P[Policy and metadata]
-        I[Identity and credentials]
-        K[Key and trust material]
-        P --> I
-        I --> K
+        A[OAuth 2.0: delegation, grants and threat model]
+        B[Policy and configuration]
+        C[Identity and trust data]
+        A --> B
+        B --> C
     end
 
     subgraph RP[Runtime plane]
         direction TB
-        C[Client or subject]
-        KC[Keycloak trust service]
-        E[Enforcement point]
-        R[Protected resource]
-        C --> KC
-        KC --> E
-        E --> R
+        D[Client or workload]
+        E[Keycloak]
+        F[Gateway or relying party]
+        G[Protected service]
+        D --> E
+        E --> F
+        F --> G
     end
 
     CP --> RP
 ```
 
-## 6.5 Production notes
+## 6.4 Production notes
 
 **Common mistakes**
 
-* Deploying configuration before clarifying authoritative ownership of identities, claims or policies.
-* Accepting default protocol/library behavior without explicit validation requirements.
-* Treating this topic as a one-time setup instead of an operational lifecycle.
+* Using one generic client for many apps and environments.
+* Over-broad default scopes (`openid profile email roles everything`).
+* Resource servers accepting any token signed by realm regardless of audience.
 
 **Best practices**
 
-* Define trust, ownership and rollback criteria in writing before rollout.
-* Measure runtime behavior with explicit SLO-oriented signals tied to this chapter's control points.
-* Rehearse failure drills that include both technical and governance decisions.
+* Register exact redirect URIs and strict client type metadata.
+* Use confidential/public separation and rotate client credentials.
+* Validate `iss`, `aud`, `exp`, and where needed `azp` at every API.
 
 **Security implications**
 
-Misconfiguration in this area usually creates silent over-trust: tokens accepted in the wrong context, stale identity data, weak assurance reuse, or unverified delegation. These are high-impact because they often preserve application availability while degrading security invisibly.
+****** theft equals delegated access theft. Sender-constraining and least-privilege scope policy reduce replay value and blast radius.
 
 **Performance implications**
 
-Performance risk comes from hidden remote dependencies and repeated validation work. Cache strategy, timeout policy and token/session lifetimes must be tuned together; otherwise, peak load amplifies control-plane ambiguity into runtime saturation.
+Token endpoint load rises with short TTL and high refresh churn; capacity planning must include grant mix and client retry behavior.
 
-## 6.6 Troubleshooting
+## 6.5 Troubleshooting
 
-If APIs reject tokens, compare issuer and audience checks at gateway and service layers, then validate clock synchronization. Build troubleshooting as a layered checklist: protocol correctness, cryptographic validation, policy evaluation, then infrastructure health. This ordering avoids premature scaling or unsafe hotfixes.
+* If auth code exchange fails, inspect PKCE verifier/challenge mismatch and redirect URI exactness.
+* If API accepts wrong-client tokens, inspect audience enforcement path in gateway/service.
+* If refresh storms occur, inspect client retry backoff and session idle policy.
 
-## 6.7 Common misconceptions
+## 6.6 Common misconceptions
 
-* OAuth 2.0 is not an authentication protocol by itself; OIDC adds authenticated identity semantics.
-* "If it works in a demo, it is production-ready" — false; production requires resilience, observability and governance evidence.
-* "One successful login proves the design" — false; architecture quality is proven across lifecycle events, failure events and audit replay.
+* OAuth is authentication by itself.
+* Scopes are roles.
+* Signing a token is enough without audience checks.
 
-## 6.8 Interview questions
+## 6.7 Interview questions (graded)
 
 **Beginner**
 
-1. What business problem does this chapter's topic solve in IAM?
-2. Which component in Keycloak is most directly involved?
+- **Q:** What problem does OAuth solve?
+- **Expected answer:** Delegated API access without sharing user passwords.
 
 **Intermediate**
 
-3. Which trust boundary is easiest to misconfigure here, and why?
-4. What telemetry would you add to detect failure early?
+- **Q:** Why is authorization code + PKCE preferred?
+- **Expected answer:** It protects code interception for public and browser/mobile clients.
 
 **Senior**
 
-5. How would you design this area for high assurance without breaking developer velocity?
-6. Which trade-offs would you document for auditors and platform owners?
+- **Q:** How do you prevent token confusion across APIs?
+- **Expected answer:** Per-resource audiences/scopes and strict API-side claim validation.
 
 **Expert**
 
-7. Describe a failure mode that remains "green" on infrastructure dashboards but is security-critical.
-8. How would you prove remediation quality after a major incident linked to this domain?
+- **Q:** Which OAuth threats remain after PKCE and how do you mitigate?
+- **Expected answer:** Replay/theft and issuer mix-up remain; enforce sender constraints and metadata pinning.
 
-## 6.9 Summary
+## 6.8 Summary
 
-* This chapter's domain is fundamentally about explicit trust and ownership, not only feature enablement.
-* Keycloak implementation quality depends on mapping control-plane clarity to runtime enforcement.
-* Security and performance outcomes are coupled; both must be designed and measured together.
-* Troubleshooting quality improves dramatically when protocol, policy and infrastructure checks are ordered deliberately.
+* OAuth is a delegation framework with strict actor boundaries.
+* Grant choice is a security decision.
+* Audience validation is mandatory.
+* Threat modeling must include retry and outage behavior.
 
-## 6.10 References
+## 6.9 References
 
 * RFC 6749
 * RFC 6750
+* RFC 7636
 * RFC 6819
-* OAuth 2.1 draft
 
 
 # Chapter 7 — OpenID Connect: authentication on top of OAuth 2.0
 
 > **Objectives of this chapter**
-> By the end of it you will be able to: explain why this domain exists in enterprise IAM, use precise vocabulary when designing with Keycloak, map the topic to production controls, diagnose common failure patterns, and answer graded interview questions with architecture-level trade-off reasoning.
+> Explain OIDC identity assertions, discovery, session state, and safe client implementation patterns.
 
-## 7.1 Why this chapter matters before implementation
+## 7.1 Why this topic exists (before how)
 
-OIDC exists because OAuth 2.0 alone cannot provide interoperable authentication semantics, user identity claims, or session continuity for applications. In interviews and production reviews, this topic is usually the boundary between configuration knowledge and architecture accountability: if the underlying rationale is weak, the resulting security model is brittle even when syntax is correct.
+OIDC adds interoperable authentication semantics to OAuth 2.0: who authenticated, when, and with what assurance. Without OIDC, OAuth clients cannot reliably prove user identity.
 
-The design principle used in this book remains the same: define trust boundaries, failure modes and ownership first; only then choose Keycloak settings, adapters, proxies or automation patterns. Implement OIDC by anchoring issuer metadata, using authorization code + PKCE for browser/mobile clients, and separating ID token processing from API access token validation.
+## 7.2 Core mechanisms and architecture decisions
 
-## 7.2 Core model and terminology
+* ID token is for client authentication context; access token is for APIs.
+* Discovery (`.well-known/openid-configuration`) binds endpoints and capabilities to issuer.
+* Nonce/state protect replay and CSRF/mix-up in browser flows.
+* Claims release via scopes and UserInfo requires data minimization discipline.
 
-The useful way to reason is to separate **control plane** from **runtime plane**. The control plane defines identities, credentials, policies and metadata ownership. The runtime plane carries protocol exchanges and enforcement decisions under latency and failure constraints. Many outages come from mixing the two and assuming runtime can fix control-plane ambiguity.
+## 7.3 Chapter schema
 
-For this chapter, keep three questions in scope: who is authoritative, what is cryptographically trusted, and where decisions are enforced. If one of these answers is implicit, incident response will be slower and audit evidence will be weaker.
-
-## 7.3 Keycloak implementation perspective
-
-Keycloak should be used as a deterministic trust service, not a collection of ad-hoc toggles. Start with a written contract (issuers, audiences, key material, lifecycle rules, mapper ownership), then encode it consistently in realms, clients, flows and automation.
-
-Operationally, introduce changes with rollback posture: canary realm/client changes, measurable acceptance criteria, and explicit compatibility windows for dependent applications. Security-sensitive defaults should be enforced centrally and reviewed through pull requests rather than direct console edits.
-
-## 7.4 Architecture schema
-
-Schema 7.1 — Control plane and runtime plane for chapter 7
+Schema 7.1 — OpenID Connect: authentication on top of OAuth 2.0: control and runtime path
 
 ```mermaid
 flowchart TB
     subgraph CP[Control plane]
         direction TB
-        P[Policy and metadata]
-        I[Identity and credentials]
-        K[Key and trust material]
-        P --> I
-        I --> K
+        A[OpenID Connect: authentication on top of OAuth 2.0]
+        B[Policy and configuration]
+        C[Identity and trust data]
+        A --> B
+        B --> C
     end
 
     subgraph RP[Runtime plane]
         direction TB
-        C[Client or subject]
-        KC[Keycloak trust service]
-        E[Enforcement point]
-        R[Protected resource]
-        C --> KC
-        KC --> E
-        E --> R
+        D[Client or workload]
+        E[Keycloak]
+        F[Gateway or relying party]
+        G[Protected service]
+        D --> E
+        E --> F
+        F --> G
     end
 
     CP --> RP
 ```
 
-## 7.5 Production notes
+## 7.4 Production notes
 
 **Common mistakes**
 
-* Deploying configuration before clarifying authoritative ownership of identities, claims or policies.
-* Accepting default protocol/library behavior without explicit validation requirements.
-* Treating this topic as a one-time setup instead of an operational lifecycle.
+* Using ID token as bearer token to APIs.
+* Skipping nonce validation in SPA/mobile clients.
+* Treating UserInfo as always fresher than ID token without cache strategy.
 
 **Best practices**
 
-* Define trust, ownership and rollback criteria in writing before rollout.
-* Measure runtime behavior with explicit SLO-oriented signals tied to this chapter's control points.
-* Rehearse failure drills that include both technical and governance decisions.
+* Pin issuer/discovery metadata and enforce exact issuer match.
+* Validate ID token signature, audience, nonce, and auth_time when required.
+* Use pairwise subject identifiers when privacy boundaries require unlinkability.
 
 **Security implications**
 
-Misconfiguration in this area usually creates silent over-trust: tokens accepted in the wrong context, stale identity data, weak assurance reuse, or unverified delegation. These are high-impact because they often preserve application availability while degrading security invisibly.
+Identity claims often include personal data. Over-sharing claims across clients increases privacy and breach impact.
 
 **Performance implications**
 
-Performance risk comes from hidden remote dependencies and repeated validation work. Cache strategy, timeout policy and token/session lifetimes must be tuned together; otherwise, peak load amplifies control-plane ambiguity into runtime saturation.
+Heavy UserInfo calls can add latency; decide between richer ID tokens and runtime UserInfo based on freshness and scale needs.
 
-## 7.6 Troubleshooting
+## 7.5 Troubleshooting
 
-If an app cannot parse identity claims, verify discovery metadata, nonce/state handling and mapper output. Build troubleshooting as a layered checklist: protocol correctness, cryptographic validation, policy evaluation, then infrastructure health. This ordering avoids premature scaling or unsafe hotfixes.
+* If login succeeds but user profile is empty, inspect scope-to-claim mappers.
+* If nonce errors are intermittent, inspect multi-tab/session storage behavior in client.
+* If RP-initiated logout fails, inspect post-logout redirect URI registration and session cookies.
 
-## 7.7 Common misconceptions
+## 7.6 Common misconceptions
 
-* ID tokens are not API bearer tokens; access tokens are the resource-server artifact.
-* "If it works in a demo, it is production-ready" — false; production requires resilience, observability and governance evidence.
-* "One successful login proves the design" — false; architecture quality is proven across lifecycle events, failure events and audit replay.
+* OIDC is just OAuth with one extra endpoint.
+* ID token and access token are interchangeable.
+* Discovery means no need to validate issuer.
 
-## 7.8 Interview questions
+## 7.7 Interview questions (graded)
 
 **Beginner**
 
-1. What business problem does this chapter's topic solve in IAM?
-2. Which component in Keycloak is most directly involved?
+- **Q:** What does OIDC add to OAuth?
+- **Expected answer:** Authentication and standardized identity claims.
 
 **Intermediate**
 
-3. Which trust boundary is easiest to misconfigure here, and why?
-4. What telemetry would you add to detect failure early?
+- **Q:** Why do we need nonce?
+- **Expected answer:** To prevent replay/token injection in browser-mediated flows.
 
 **Senior**
 
-5. How would you design this area for high assurance without breaking developer velocity?
-6. Which trade-offs would you document for auditors and platform owners?
+- **Q:** When do you call UserInfo vs rely on ID token claims?
+- **Expected answer:** UserInfo for fresher or dynamic claims; ID token for bounded login context.
 
 **Expert**
 
-7. Describe a failure mode that remains "green" on infrastructure dashboards but is security-critical.
-8. How would you prove remediation quality after a major incident linked to this domain?
+- **Q:** How do you design privacy-preserving subject identifiers across clients?
+- **Expected answer:** Use pairwise subjects and client-sector design to avoid cross-app correlation.
 
-## 7.9 Summary
+## 7.8 Summary
 
-* This chapter's domain is fundamentally about explicit trust and ownership, not only feature enablement.
-* Keycloak implementation quality depends on mapping control-plane clarity to runtime enforcement.
-* Security and performance outcomes are coupled; both must be designed and measured together.
-* Troubleshooting quality improves dramatically when protocol, policy and infrastructure checks are ordered deliberately.
+* OIDC formalizes authentication semantics on OAuth rails.
+* Token purpose separation is non-negotiable.
+* Discovery improves interoperability but not trust by itself.
+* Claim minimization is both privacy and security control.
 
-## 7.10 References
+## 7.9 References
 
 * OpenID Connect Core 1.0
+* OpenID Discovery 1.0
 * RFC 8414
-* RFC 7636
-* OpenID Session Management
+* OpenID RP-Initiated Logout
 
 
 # Chapter 8 — JWT: structure, signature, validation and pitfalls
 
 > **Objectives of this chapter**
-> By the end of it you will be able to: explain why this domain exists in enterprise IAM, use precise vocabulary when designing with Keycloak, map the topic to production controls, diagnose common failure patterns, and answer graded interview questions with architecture-level trade-off reasoning.
+> Explain JOSE structure, algorithm policy, claim validation order, and common implementation vulnerabilities.
 
-## 8.1 Why this chapter matters before implementation
+## 8.1 Why this topic exists (before how)
 
-JWT became dominant because it allows offline verification and horizontal scalability, but the same compactness amplifies validation mistakes. In interviews and production reviews, this topic is usually the boundary between configuration knowledge and architecture accountability: if the underlying rationale is weak, the resulting security model is brittle even when syntax is correct.
+JWT scales because verification can be local and stateless. The same property makes validation bugs catastrophic: one parser mistake can accept forged tokens everywhere.
 
-The design principle used in this book remains the same: define trust boundaries, failure modes and ownership first; only then choose Keycloak settings, adapters, proxies or automation patterns. A robust validator checks signature first, then issuer/audience/time claims, then business claims; any reversed order leaks attack surface.
+## 8.2 Core mechanisms and architecture decisions
 
-## 8.2 Core model and terminology
+* Structure: header, payload, signature; Base64URL encoding is transport, not secrecy.
+* Algorithm policy must be explicit; never trust token-provided algorithm blindly.
+* Claim checks: signature -> issuer -> audience -> time -> business constraints.
+* JWKS cache and key rotation handling determine operational reliability.
 
-The useful way to reason is to separate **control plane** from **runtime plane**. The control plane defines identities, credentials, policies and metadata ownership. The runtime plane carries protocol exchanges and enforcement decisions under latency and failure constraints. Many outages come from mixing the two and assuming runtime can fix control-plane ambiguity.
+## 8.3 Chapter schema
 
-For this chapter, keep three questions in scope: who is authoritative, what is cryptographically trusted, and where decisions are enforced. If one of these answers is implicit, incident response will be slower and audit evidence will be weaker.
-
-## 8.3 Keycloak implementation perspective
-
-Keycloak should be used as a deterministic trust service, not a collection of ad-hoc toggles. Start with a written contract (issuers, audiences, key material, lifecycle rules, mapper ownership), then encode it consistently in realms, clients, flows and automation.
-
-Operationally, introduce changes with rollback posture: canary realm/client changes, measurable acceptance criteria, and explicit compatibility windows for dependent applications. Security-sensitive defaults should be enforced centrally and reviewed through pull requests rather than direct console edits.
-
-## 8.4 Architecture schema
-
-Schema 8.1 — Control plane and runtime plane for chapter 8
+Schema 8.1 — JWT: structure, signature, validation and pitfalls: control and runtime path
 
 ```mermaid
 flowchart TB
     subgraph CP[Control plane]
         direction TB
-        P[Policy and metadata]
-        I[Identity and credentials]
-        K[Key and trust material]
-        P --> I
-        I --> K
+        A[JWT: structure, signature, validation and pitfalls]
+        B[Policy and configuration]
+        C[Identity and trust data]
+        A --> B
+        B --> C
     end
 
     subgraph RP[Runtime plane]
         direction TB
-        C[Client or subject]
-        KC[Keycloak trust service]
-        E[Enforcement point]
-        R[Protected resource]
-        C --> KC
-        KC --> E
-        E --> R
+        D[Client or workload]
+        E[Keycloak]
+        F[Gateway or relying party]
+        G[Protected service]
+        D --> E
+        E --> F
+        F --> G
     end
 
     CP --> RP
 ```
 
-## 8.5 Production notes
+## 8.4 Production notes
 
 **Common mistakes**
 
-* Deploying configuration before clarifying authoritative ownership of identities, claims or policies.
-* Accepting default protocol/library behavior without explicit validation requirements.
-* Treating this topic as a one-time setup instead of an operational lifecycle.
+* Accepting `none` or unexpected algorithms due to permissive library defaults.
+* Skipping audience checks for internal services.
+* Ignoring clock skew/leeway coordination across distributed services.
 
 **Best practices**
 
-* Define trust, ownership and rollback criteria in writing before rollout.
-* Measure runtime behavior with explicit SLO-oriented signals tied to this chapter's control points.
-* Rehearse failure drills that include both technical and governance decisions.
+* Pin allowed algorithms per issuer.
+* Centralize token validation middleware to avoid service-by-service drift.
+* Define JWKS cache TTL and emergency key revoke playbook.
 
 **Security implications**
 
-Misconfiguration in this area usually creates silent over-trust: tokens accepted in the wrong context, stale identity data, weak assurance reuse, or unverified delegation. These are high-impact because they often preserve application availability while degrading security invisibly.
+JWT payload is readable; placing sensitive PII in tokens leaks data into logs and browser storage.
 
 **Performance implications**
 
-Performance risk comes from hidden remote dependencies and repeated validation work. Cache strategy, timeout policy and token/session lifetimes must be tuned together; otherwise, peak load amplifies control-plane ambiguity into runtime saturation.
+Large tokens increase header overhead and reverse-proxy limits; token bloat directly impacts latency and error rates.
 
-## 8.6 Troubleshooting
+## 8.5 Troubleshooting
 
-When token validation differs by service, compare JWT library defaults, accepted algorithms and leeway configuration. Build troubleshooting as a layered checklist: protocol correctness, cryptographic validation, policy evaluation, then infrastructure health. This ordering avoids premature scaling or unsafe hotfixes.
+* If one service rejects token but another accepts, diff library versions/defaults.
+* If signature suddenly fails, inspect JWKS refresh behavior and stale cache.
+* If `nbf/exp` failures spike, inspect NTP drift across nodes.
 
-## 8.7 Common misconceptions
+## 8.6 Common misconceptions
 
-* JWT signature validation is not optional even on internal networks; internal threat actors exist.
-* "If it works in a demo, it is production-ready" — false; production requires resilience, observability and governance evidence.
-* "One successful login proves the design" — false; architecture quality is proven across lifecycle events, failure events and audit replay.
+* JWTs are encrypted by default.
+* Signed token means every claim is safe to trust without context.
+* More claims is always better for downstream convenience.
 
-## 8.8 Interview questions
+## 8.7 Interview questions (graded)
 
 **Beginner**
 
-1. What business problem does this chapter's topic solve in IAM?
-2. Which component in Keycloak is most directly involved?
+- **Q:** What does a JWT signature prove?
+- **Expected answer:** Integrity and issuer possession of signing key.
 
 **Intermediate**
 
-3. Which trust boundary is easiest to misconfigure here, and why?
-4. What telemetry would you add to detect failure early?
+- **Q:** Why check audience after signature?
+- **Expected answer:** Because valid signatures can still target different recipients.
 
 **Senior**
 
-5. How would you design this area for high assurance without breaking developer velocity?
-6. Which trade-offs would you document for auditors and platform owners?
+- **Q:** How do you handle emergency key compromise?
+- **Expected answer:** Rotate keys, revoke sessions/tokens where possible, force cache refresh, and audit acceptance paths.
 
 **Expert**
 
-7. Describe a failure mode that remains "green" on infrastructure dashboards but is security-critical.
-8. How would you prove remediation quality after a major incident linked to this domain?
+- **Q:** How would you constrain token size in microservice estates?
+- **Expected answer:** Claim budgeting, per-API scopes, and token exchange/downscoping patterns.
 
-## 8.9 Summary
+## 8.8 Summary
 
-* This chapter's domain is fundamentally about explicit trust and ownership, not only feature enablement.
-* Keycloak implementation quality depends on mapping control-plane clarity to runtime enforcement.
-* Security and performance outcomes are coupled; both must be designed and measured together.
-* Troubleshooting quality improves dramatically when protocol, policy and infrastructure checks are ordered deliberately.
+* JWT validation order matters.
+* Algorithm and audience policy must be strict.
+* JWKS lifecycle is operationally critical.
+* Token bloat is a real reliability issue.
 
-## 8.10 References
+## 8.9 References
 
 * RFC 7515
 * RFC 7517
@@ -1529,117 +1495,112 @@ When token validation differs by service, compare JWT library defaults, accepted
 # Chapter 9 — SAML 2.0 and interoperability with OIDC
 
 > **Objectives of this chapter**
-> By the end of it you will be able to: explain why this domain exists in enterprise IAM, use precise vocabulary when designing with Keycloak, map the topic to production controls, diagnose common failure patterns, and answer graded interview questions with architecture-level trade-off reasoning.
+> Explain SAML assertion flow, XML signature realities, and bridge patterns between SAML and OIDC in Keycloak.
 
-## 9.1 Why this chapter matters before implementation
+## 9.1 Why this topic exists (before how)
 
-SAML remains entrenched in enterprise SaaS and B2B federation, so interoperability strategy matters more than protocol preference. In interviews and production reviews, this topic is usually the boundary between configuration knowledge and architecture accountability: if the underlying rationale is weak, the resulting security model is brittle even when syntax is correct.
+SAML remains dominant in enterprise SaaS and partner federation. Interoperability matters because migration is incremental: many organizations run SAML and OIDC simultaneously for years.
 
-The design principle used in this book remains the same: define trust boundaries, failure modes and ownership first; only then choose Keycloak settings, adapters, proxies or automation patterns. In practice, interoperability means deterministic claim mapping, NameID strategy, certificate rollover runbooks and clear ownership of metadata publication.
+## 9.2 Core mechanisms and architecture decisions
 
-## 9.2 Core model and terminology
+* SAML assertions carry authentication statements, attributes, and conditions (audience, time, recipient).
+* Bindings matter: Redirect, POST, Artifact each alter size, confidentiality, and operational behavior.
+* Metadata lifecycle (entity IDs, certs, endpoints) is trust contract, not boilerplate.
+* Keycloak can broker SAML upstream and issue OIDC downstream, or inverse depending integration needs.
 
-The useful way to reason is to separate **control plane** from **runtime plane**. The control plane defines identities, credentials, policies and metadata ownership. The runtime plane carries protocol exchanges and enforcement decisions under latency and failure constraints. Many outages come from mixing the two and assuming runtime can fix control-plane ambiguity.
+## 9.3 Chapter schema
 
-For this chapter, keep three questions in scope: who is authoritative, what is cryptographically trusted, and where decisions are enforced. If one of these answers is implicit, incident response will be slower and audit evidence will be weaker.
-
-## 9.3 Keycloak implementation perspective
-
-Keycloak should be used as a deterministic trust service, not a collection of ad-hoc toggles. Start with a written contract (issuers, audiences, key material, lifecycle rules, mapper ownership), then encode it consistently in realms, clients, flows and automation.
-
-Operationally, introduce changes with rollback posture: canary realm/client changes, measurable acceptance criteria, and explicit compatibility windows for dependent applications. Security-sensitive defaults should be enforced centrally and reviewed through pull requests rather than direct console edits.
-
-## 9.4 Architecture schema
-
-Schema 9.1 — Control plane and runtime plane for chapter 9
+Schema 9.1 — SAML 2.0 and interoperability with OIDC: control and runtime path
 
 ```mermaid
 flowchart TB
     subgraph CP[Control plane]
         direction TB
-        P[Policy and metadata]
-        I[Identity and credentials]
-        K[Key and trust material]
-        P --> I
-        I --> K
+        A[SAML 2.0 and interoperability with OIDC]
+        B[Policy and configuration]
+        C[Identity and trust data]
+        A --> B
+        B --> C
     end
 
     subgraph RP[Runtime plane]
         direction TB
-        C[Client or subject]
-        KC[Keycloak trust service]
-        E[Enforcement point]
-        R[Protected resource]
-        C --> KC
-        KC --> E
-        E --> R
+        D[Client or workload]
+        E[Keycloak]
+        F[Gateway or relying party]
+        G[Protected service]
+        D --> E
+        E --> F
+        F --> G
     end
 
     CP --> RP
 ```
 
-## 9.5 Production notes
+## 9.4 Production notes
 
 **Common mistakes**
 
-* Deploying configuration before clarifying authoritative ownership of identities, claims or policies.
-* Accepting default protocol/library behavior without explicit validation requirements.
-* Treating this topic as a one-time setup instead of an operational lifecycle.
+* Ignoring XML signature wrapping protections in legacy stacks.
+* Manually editing metadata without version control.
+* Mapping NameID/email incorrectly, causing account-link collisions.
 
 **Best practices**
 
-* Define trust, ownership and rollback criteria in writing before rollout.
-* Measure runtime behavior with explicit SLO-oriented signals tied to this chapter's control points.
-* Rehearse failure drills that include both technical and governance decisions.
+* Use signed metadata and automated rollover procedures.
+* Normalize identity-linking rules (immutable subject preferred over email).
+* Test clock skew and assertion lifetime with realistic latency.
 
 **Security implications**
 
-Misconfiguration in this area usually creates silent over-trust: tokens accepted in the wrong context, stale identity data, weak assurance reuse, or unverified delegation. These are high-impact because they often preserve application availability while degrading security invisibly.
+XML signature handling has historical parser pitfalls; hardened parser settings and library updates are mandatory.
 
 **Performance implications**
 
-Performance risk comes from hidden remote dependencies and repeated validation work. Cache strategy, timeout policy and token/session lifetimes must be tuned together; otherwise, peak load amplifies control-plane ambiguity into runtime saturation.
+Large SAML assertions can stress browser redirects and reverse proxies; attribute minimization and POST binding choices matter.
 
-## 9.6 Troubleshooting
+## 9.5 Troubleshooting
 
-If federation breaks after certificate rollover, inspect metadata cache TTLs and signature trust anchors on both sides. Build troubleshooting as a layered checklist: protocol correctness, cryptographic validation, policy evaluation, then infrastructure health. This ordering avoids premature scaling or unsafe hotfixes.
+* If SAML login loops, inspect ACS URL and entityID exact match.
+* If signature errors appear post-rotation, inspect partner metadata cache refresh.
+* If users map to wrong accounts, inspect transient/persistent NameID strategy.
 
-## 9.7 Common misconceptions
+## 9.6 Common misconceptions
 
-* SAML is not inherently less secure than OIDC; most incidents stem from implementation and metadata errors.
-* "If it works in a demo, it is production-ready" — false; production requires resilience, observability and governance evidence.
-* "One successful login proves the design" — false; architecture quality is proven across lifecycle events, failure events and audit replay.
+* SAML is insecure by design.
+* OIDC migration means SAML can be ignored immediately.
+* Any unique email is safe as long-term federation key.
 
-## 9.8 Interview questions
+## 9.7 Interview questions (graded)
 
 **Beginner**
 
-1. What business problem does this chapter's topic solve in IAM?
-2. Which component in Keycloak is most directly involved?
+- **Q:** What does a SAML IdP assertion provide?
+- **Expected answer:** Authenticated statement and attributes for SP consumption.
 
 **Intermediate**
 
-3. Which trust boundary is easiest to misconfigure here, and why?
-4. What telemetry would you add to detect failure early?
+- **Q:** Why is metadata management critical?
+- **Expected answer:** It defines endpoints and trust keys; stale metadata breaks or weakens trust.
 
 **Senior**
 
-5. How would you design this area for high assurance without breaking developer velocity?
-6. Which trade-offs would you document for auditors and platform owners?
+- **Q:** How do you bridge SAML to OIDC safely?
+- **Expected answer:** Preserve stable subject mapping, normalize assurance claims, and manage token/assertion TTL mismatches.
 
 **Expert**
 
-7. Describe a failure mode that remains "green" on infrastructure dashboards but is security-critical.
-8. How would you prove remediation quality after a major incident linked to this domain?
+- **Q:** What are the highest-risk parser-level SAML issues?
+- **Expected answer:** XML signature wrapping/XXE-like parser hardening gaps in outdated toolchains.
 
-## 9.9 Summary
+## 9.8 Summary
 
-* This chapter's domain is fundamentally about explicit trust and ownership, not only feature enablement.
-* Keycloak implementation quality depends on mapping control-plane clarity to runtime enforcement.
-* Security and performance outcomes are coupled; both must be designed and measured together.
-* Troubleshooting quality improves dramatically when protocol, policy and infrastructure checks are ordered deliberately.
+* SAML remains enterprise-critical.
+* Interop success depends on identity mapping and metadata rigor.
+* Bridge design must preserve assurance semantics.
+* Operational rollover discipline prevents major outages.
 
-## 9.10 References
+## 9.9 References
 
 * OASIS SAML Core 2.0
 * SAML Bindings 2.0
@@ -1650,240 +1611,230 @@ If federation breaks after certificate rollover, inspect metadata cache TTLs and
 # Chapter 10 — PKCE, DPoP, mTLS-bound tokens and FAPI
 
 > **Objectives of this chapter**
-> By the end of it you will be able to: explain why this domain exists in enterprise IAM, use precise vocabulary when designing with Keycloak, map the topic to production controls, diagnose common failure patterns, and answer graded interview questions with architecture-level trade-off reasoning.
+> Explain sender-constrained token patterns and financial-grade hardening profiles for high-risk OAuth/OIDC systems.
 
-## 10.1 Why this chapter matters before implementation
+## 10.1 Why this topic exists (before how)
 
-Modern profiles exist because bearer-only security was insufficient against mobile interception, code theft and token replay in high-risk sectors. In interviews and production reviews, this topic is usually the boundary between configuration knowledge and architecture accountability: if the underlying rationale is weak, the resulting security model is brittle even when syntax is correct.
+****** are easy to deploy but replayable. Modern extensions bind authorization artifacts to client-held key material, reducing theft replay value in mobile, SPA, and API ecosystems.
 
-The design principle used in this book remains the same: define trust boundaries, failure modes and ownership first; only then choose Keycloak settings, adapters, proxies or automation patterns. Keycloak deployments should progressively adopt PKCE-by-default, DPoP or mTLS for high-value APIs, and profile-aligned constraints for regulated domains.
+## 10.2 Core mechanisms and architecture decisions
 
-## 10.2 Core model and terminology
+* PKCE binds auth code redemption to original client entropy (`code_verifier`).
+* DPoP binds token use to proof JWT signed by client key per request context.
+* mTLS-bound tokens bind token to client certificate at TLS layer.
+* FAPI profiles require stricter defaults (PAR/JAR, PKCE, stronger client auth, tighter redirect controls).
 
-The useful way to reason is to separate **control plane** from **runtime plane**. The control plane defines identities, credentials, policies and metadata ownership. The runtime plane carries protocol exchanges and enforcement decisions under latency and failure constraints. Many outages come from mixing the two and assuming runtime can fix control-plane ambiguity.
+## 10.3 Chapter schema
 
-For this chapter, keep three questions in scope: who is authoritative, what is cryptographically trusted, and where decisions are enforced. If one of these answers is implicit, incident response will be slower and audit evidence will be weaker.
-
-## 10.3 Keycloak implementation perspective
-
-Keycloak should be used as a deterministic trust service, not a collection of ad-hoc toggles. Start with a written contract (issuers, audiences, key material, lifecycle rules, mapper ownership), then encode it consistently in realms, clients, flows and automation.
-
-Operationally, introduce changes with rollback posture: canary realm/client changes, measurable acceptance criteria, and explicit compatibility windows for dependent applications. Security-sensitive defaults should be enforced centrally and reviewed through pull requests rather than direct console edits.
-
-## 10.4 Architecture schema
-
-Schema 10.1 — Control plane and runtime plane for chapter 10
+Schema 10.1 — PKCE, DPoP, mTLS-bound tokens and FAPI: control and runtime path
 
 ```mermaid
 flowchart TB
     subgraph CP[Control plane]
         direction TB
-        P[Policy and metadata]
-        I[Identity and credentials]
-        K[Key and trust material]
-        P --> I
-        I --> K
+        A[PKCE, DPoP, mTLS-bound tokens and FAPI]
+        B[Policy and configuration]
+        C[Identity and trust data]
+        A --> B
+        B --> C
     end
 
     subgraph RP[Runtime plane]
         direction TB
-        C[Client or subject]
-        KC[Keycloak trust service]
-        E[Enforcement point]
-        R[Protected resource]
-        C --> KC
-        KC --> E
-        E --> R
+        D[Client or workload]
+        E[Keycloak]
+        F[Gateway or relying party]
+        G[Protected service]
+        D --> E
+        E --> F
+        F --> G
     end
 
     CP --> RP
 ```
 
-## 10.5 Production notes
+## 10.4 Production notes
 
 **Common mistakes**
 
-* Deploying configuration before clarifying authoritative ownership of identities, claims or policies.
-* Accepting default protocol/library behavior without explicit validation requirements.
-* Treating this topic as a one-time setup instead of an operational lifecycle.
+* Assuming PKCE alone protects access tokens after issuance.
+* Terminating TLS where client cert identity is lost before enforcement.
+* Implementing DPoP without nonce/replay storage strategy.
 
 **Best practices**
 
-* Define trust, ownership and rollback criteria in writing before rollout.
-* Measure runtime behavior with explicit SLO-oriented signals tied to this chapter's control points.
-* Rehearse failure drills that include both technical and governance decisions.
+* Use PKCE for every public client, no exceptions.
+* Choose mTLS for server-to-server where certificate ops are mature; DPoP for app/mobile ergonomics.
+* Adopt FAPI profile baselines for regulated/high-value APIs even outside banking when risk justifies.
 
 **Security implications**
 
-Misconfiguration in this area usually creates silent over-trust: tokens accepted in the wrong context, stale identity data, weak assurance reuse, or unverified delegation. These are high-impact because they often preserve application availability while degrading security invisibly.
+Sender-constrained tokens reduce replay impact but raise key-management obligations. Key custody and rotation quality become primary controls.
 
 **Performance implications**
 
-Performance risk comes from hidden remote dependencies and repeated validation work. Cache strategy, timeout policy and token/session lifetimes must be tuned together; otherwise, peak load amplifies control-plane ambiguity into runtime saturation.
+DPoP proof verification adds crypto per request; capacity models must include signature verification cost and nonce persistence.
 
-## 10.6 Troubleshooting
+## 10.5 Troubleshooting
 
-If DPoP or mTLS enforcement fails, verify key binding claims and proxy behavior for client certificate propagation. Build troubleshooting as a layered checklist: protocol correctness, cryptographic validation, policy evaluation, then infrastructure health. This ordering avoids premature scaling or unsafe hotfixes.
+* If DPoP failures spike, compare server clock skew and `htu/htm` normalization.
+* If mTLS-bound token accepted without client cert, inspect proxy cert forwarding chain.
+* If authorization code exchange fails, verify PKCE method and verifier encoding.
 
-## 10.7 Common misconceptions
+## 10.6 Common misconceptions
 
-* PKCE is not only for mobile; SPAs and all public clients need it.
-* "If it works in a demo, it is production-ready" — false; production requires resilience, observability and governance evidence.
-* "One successful login proves the design" — false; architecture quality is proven across lifecycle events, failure events and audit replay.
+* PKCE is optional for modern apps.
+* DPoP and mTLS are equivalent operationally.
+* FAPI is only relevant to banks.
 
-## 10.8 Interview questions
+## 10.7 Interview questions (graded)
 
 **Beginner**
 
-1. What business problem does this chapter's topic solve in IAM?
-2. Which component in Keycloak is most directly involved?
+- **Q:** What threat does PKCE primarily mitigate?
+- **Expected answer:** Authorization code interception/replay by unauthorized client.
 
 **Intermediate**
 
-3. Which trust boundary is easiest to misconfigure here, and why?
-4. What telemetry would you add to detect failure early?
+- **Q:** Why are sender-constrained tokens stronger than bearer tokens?
+- **Expected answer:** Stolen token alone is insufficient without matching private key or certificate context.
 
 **Senior**
 
-5. How would you design this area for high assurance without breaking developer velocity?
-6. Which trade-offs would you document for auditors and platform owners?
+- **Q:** How do you choose DPoP vs mTLS?
+- **Expected answer:** By client type, cert lifecycle maturity, and gateway support constraints.
 
 **Expert**
 
-7. Describe a failure mode that remains "green" on infrastructure dashboards but is security-critical.
-8. How would you prove remediation quality after a major incident linked to this domain?
+- **Q:** What additional telemetry is required for DPoP?
+- **Expected answer:** Proof replay detection, key thumbprint drift, nonce issuance/validation metrics.
 
-## 10.9 Summary
+## 10.8 Summary
 
-* This chapter's domain is fundamentally about explicit trust and ownership, not only feature enablement.
-* Keycloak implementation quality depends on mapping control-plane clarity to runtime enforcement.
-* Security and performance outcomes are coupled; both must be designed and measured together.
-* Troubleshooting quality improves dramatically when protocol, policy and infrastructure checks are ordered deliberately.
+* Modern profiles address replay weaknesses in bearer-only designs.
+* PKCE is baseline; sender constraints are defense-in-depth for high-value APIs.
+* Operational key management is as important as protocol flags.
+* FAPI controls improve both security and interoperability discipline.
 
-## 10.10 References
+## 10.9 References
 
 * RFC 7636
-* RFC 9449
 * RFC 8705
+* RFC 9449
 * FAPI 1.0/2.0 profiles
 
 
 # Chapter 11 — Internal architecture (Quarkus, Infinispan, JPA, providers)
 
 > **Objectives of this chapter**
-> By the end of it you will be able to: explain why this domain exists in enterprise IAM, use precise vocabulary when designing with Keycloak, map the topic to production controls, diagnose common failure patterns, and answer graded interview questions with architecture-level trade-off reasoning.
+> Describe Keycloak runtime internals and subsystem interactions under load and failure.
 
-## 11.1 Why this chapter matters before implementation
+## 11.1 Why this topic exists (before how)
 
-Internal architecture knowledge is the difference between configuration skills and production operating skills when latency, cache misses or DB locks appear. In interviews and production reviews, this topic is usually the boundary between configuration knowledge and architecture accountability: if the underlying rationale is weak, the resulting security model is brittle even when syntax is correct.
+Internal architecture (Quarkus, Infinispan, JPA, providers) is a recurring source of production risk because teams often optimize for initial setup speed and under-specify lifecycle controls. Senior-level design requires explicit boundaries, failure assumptions and ownership contracts before configuration work starts.
 
-The design principle used in this book remains the same: define trust boundaries, failure modes and ownership first; only then choose Keycloak settings, adapters, proxies or automation patterns. You should map each runtime symptom to an internal subsystem: login delay may be DB I/O, cache topology, or external federation latency, not only CPU.
+## 11.2 Core mechanisms and architecture decisions
 
-## 11.2 Core model and terminology
+* Quarkus runtime boot/profile behavior and impact on startup probes.
+* Infinispan cache roles (sessions, login failures, keys) and invalidation semantics.
+* JPA persistence hotspots: user queries, event tables, transaction boundaries.
+* Provider SPI chain execution order during auth and token issuance.
 
-The useful way to reason is to separate **control plane** from **runtime plane**. The control plane defines identities, credentials, policies and metadata ownership. The runtime plane carries protocol exchanges and enforcement decisions under latency and failure constraints. Many outages come from mixing the two and assuming runtime can fix control-plane ambiguity.
+## 11.3 Chapter schema
 
-For this chapter, keep three questions in scope: who is authoritative, what is cryptographically trusted, and where decisions are enforced. If one of these answers is implicit, incident response will be slower and audit evidence will be weaker.
-
-## 11.3 Keycloak implementation perspective
-
-Keycloak should be used as a deterministic trust service, not a collection of ad-hoc toggles. Start with a written contract (issuers, audiences, key material, lifecycle rules, mapper ownership), then encode it consistently in realms, clients, flows and automation.
-
-Operationally, introduce changes with rollback posture: canary realm/client changes, measurable acceptance criteria, and explicit compatibility windows for dependent applications. Security-sensitive defaults should be enforced centrally and reviewed through pull requests rather than direct console edits.
-
-## 11.4 Architecture schema
-
-Schema 11.1 — Control plane and runtime plane for chapter 11
+Schema 11.1 — Internal architecture (Quarkus, Infinispan, JPA, providers): control and runtime path
 
 ```mermaid
 flowchart TB
     subgraph CP[Control plane]
         direction TB
-        P[Policy and metadata]
-        I[Identity and credentials]
-        K[Key and trust material]
-        P --> I
-        I --> K
+        A[Internal architecture (Quarkus, Infinispan, JPA, providers)]
+        B[Policy and configuration]
+        C[Identity and trust data]
+        A --> B
+        B --> C
     end
 
     subgraph RP[Runtime plane]
         direction TB
-        C[Client or subject]
-        KC[Keycloak trust service]
-        E[Enforcement point]
-        R[Protected resource]
-        C --> KC
-        KC --> E
-        E --> R
+        D[Client or workload]
+        E[Keycloak]
+        F[Gateway or relying party]
+        G[Protected service]
+        D --> E
+        E --> F
+        F --> G
     end
 
     CP --> RP
 ```
 
-## 11.5 Production notes
+## 11.4 Production notes
 
 **Common mistakes**
 
-* Deploying configuration before clarifying authoritative ownership of identities, claims or policies.
-* Accepting default protocol/library behavior without explicit validation requirements.
-* Treating this topic as a one-time setup instead of an operational lifecycle.
+* Scaling pods without DB pool tuning.
+* Ignoring cache mode when diagnosing cross-node session inconsistency.
+* Custom provider code doing blocking remote calls on auth path.
 
 **Best practices**
 
-* Define trust, ownership and rollback criteria in writing before rollout.
-* Measure runtime behavior with explicit SLO-oriented signals tied to this chapter's control points.
-* Rehearse failure drills that include both technical and governance decisions.
+* Pin JVM/container limits with headroom validated by load tests.
+* Separate DB indexes for event-heavy tables.
+* Benchmark custom providers independently.
 
 **Security implications**
 
-Misconfiguration in this area usually creates silent over-trust: tokens accepted in the wrong context, stale identity data, weak assurance reuse, or unverified delegation. These are high-impact because they often preserve application availability while degrading security invisibly.
+Compromised provider code can bypass controls; sign and review custom jars like privileged code.
 
 **Performance implications**
 
-Performance risk comes from hidden remote dependencies and repeated validation work. Cache strategy, timeout policy and token/session lifetimes must be tuned together; otherwise, peak load amplifies control-plane ambiguity into runtime saturation.
+Hot caches can hide DB inefficiency until failover; monitor both cache hit rate and DB latency.
 
-## 11.6 Troubleshooting
+## 11.5 Troubleshooting
 
-For runtime bottlenecks, segment metrics by DB, cache and external IdP calls before changing JVM settings. Build troubleshooting as a layered checklist: protocol correctness, cryptographic validation, policy evaluation, then infrastructure health. This ordering avoids premature scaling or unsafe hotfixes.
+* If startup flaps, correlate readiness with DB migration/connectivity.
+* If sessions disappear across nodes, inspect cache owners and sticky-session assumptions.
+* If login is slow after customization, profile provider call graph.
 
-## 11.7 Common misconceptions
+## 11.6 Common misconceptions
 
-* Scaling Keycloak is not only adding pods; cache and database behavior dominate many bottlenecks.
-* "If it works in a demo, it is production-ready" — false; production requires resilience, observability and governance evidence.
-* "One successful login proves the design" — false; architecture quality is proven across lifecycle events, failure events and audit replay.
+* Keycloak internals do not matter if UI works.
+* Infinispan is only a performance cache and not correctness-relevant.
+* All SPIs are safe places for business logic.
 
-## 11.8 Interview questions
+## 11.7 Interview questions (graded)
 
 **Beginner**
 
-1. What business problem does this chapter's topic solve in IAM?
-2. Which component in Keycloak is most directly involved?
+- **Q:** What is the primary goal of "Internal architecture (Quarkus, Infinispan, JPA, providers)" in a Keycloak platform?
+- **Expected answer:** Focus on describe keycloak runtime internals and subsystem interactions under load and failure.
 
 **Intermediate**
 
-3. Which trust boundary is easiest to misconfigure here, and why?
-4. What telemetry would you add to detect failure early?
+- **Q:** Which failure mode appears first when this area is misconfigured?
+- **Expected answer:** Usually one of: Scaling pods without DB pool tuning.
 
 **Senior**
 
-5. How would you design this area for high assurance without breaking developer velocity?
-6. Which trade-offs would you document for auditors and platform owners?
+- **Q:** What design trade-off do you document before rollout for Internal architecture (Quarkus, Infinispan, JPA, providers)?
+- **Expected answer:** Document boundary ownership, rollback plan, and security vs latency trade-offs.
 
 **Expert**
 
-7. Describe a failure mode that remains "green" on infrastructure dashboards but is security-critical.
-8. How would you prove remediation quality after a major incident linked to this domain?
+- **Q:** How do you prove this domain is production-ready under failure?
+- **Expected answer:** By rehearsal with measurable SLO/security outcomes and audited control evidence.
 
-## 11.9 Summary
+## 11.8 Summary
 
-* This chapter's domain is fundamentally about explicit trust and ownership, not only feature enablement.
-* Keycloak implementation quality depends on mapping control-plane clarity to runtime enforcement.
-* Security and performance outcomes are coupled; both must be designed and measured together.
-* Troubleshooting quality improves dramatically when protocol, policy and infrastructure checks are ordered deliberately.
+* Internal architecture (Quarkus, Infinispan, JPA, providers) needs explicit control-plane decisions before runtime tuning.
+* Failure modes are predictable and should be tested deliberately.
+* Security and performance implications must be treated together.
+* Interview-grade answers should combine mechanism detail and operational trade-offs.
 
-## 11.10 References
+## 11.9 References
 
-* Keycloak Server Administration Guide
+* Keycloak Server Admin Guide
 * Quarkus docs
 * Infinispan docs
 * Jakarta Persistence spec
@@ -1892,359 +1843,344 @@ For runtime bottlenecks, segment metrics by DB, cache and external IdP calls bef
 # Chapter 12 — Realms, clients, roles, groups and client scopes
 
 > **Objectives of this chapter**
-> By the end of it you will be able to: explain why this domain exists in enterprise IAM, use precise vocabulary when designing with Keycloak, map the topic to production controls, diagnose common failure patterns, and answer graded interview questions with architecture-level trade-off reasoning.
+> Model authorization structures that stay maintainable at enterprise scale.
 
-## 12.1 Why this chapter matters before implementation
+## 12.1 Why this topic exists (before how)
 
-Most authorization defects are modelling defects, not cryptographic defects; structural clarity in realms and scopes prevents policy entropy. In interviews and production reviews, this topic is usually the boundary between configuration knowledge and architecture accountability: if the underlying rationale is weak, the resulting security model is brittle even when syntax is correct.
+Realms, clients, roles, groups and client scopes is a recurring source of production risk because teams often optimize for initial setup speed and under-specify lifecycle controls. Senior-level design requires explicit boundaries, failure assumptions and ownership contracts before configuration work starts.
 
-The design principle used in this book remains the same: define trust boundaries, failure modes and ownership first; only then choose Keycloak settings, adapters, proxies or automation patterns. Successful modelling uses stable business roles, scoped client roles, group inheritance and minimal custom claims to prevent token bloat.
+## 12.2 Core mechanisms and architecture decisions
 
-## 12.2 Core model and terminology
+* Realm is security boundary; avoid mixing populations with different policy profiles.
+* Client scopes govern claim release and token size discipline.
+* Composite roles simplify admin UX but can hide privilege escalation paths.
+* Groups should represent organization semantics; roles represent permissions.
 
-The useful way to reason is to separate **control plane** from **runtime plane**. The control plane defines identities, credentials, policies and metadata ownership. The runtime plane carries protocol exchanges and enforcement decisions under latency and failure constraints. Many outages come from mixing the two and assuming runtime can fix control-plane ambiguity.
+## 12.3 Chapter schema
 
-For this chapter, keep three questions in scope: who is authoritative, what is cryptographically trusted, and where decisions are enforced. If one of these answers is implicit, incident response will be slower and audit evidence will be weaker.
-
-## 12.3 Keycloak implementation perspective
-
-Keycloak should be used as a deterministic trust service, not a collection of ad-hoc toggles. Start with a written contract (issuers, audiences, key material, lifecycle rules, mapper ownership), then encode it consistently in realms, clients, flows and automation.
-
-Operationally, introduce changes with rollback posture: canary realm/client changes, measurable acceptance criteria, and explicit compatibility windows for dependent applications. Security-sensitive defaults should be enforced centrally and reviewed through pull requests rather than direct console edits.
-
-## 12.4 Architecture schema
-
-Schema 12.1 — Control plane and runtime plane for chapter 12
+Schema 12.1 — Realms, clients, roles, groups and client scopes: control and runtime path
 
 ```mermaid
 flowchart TB
     subgraph CP[Control plane]
         direction TB
-        P[Policy and metadata]
-        I[Identity and credentials]
-        K[Key and trust material]
-        P --> I
-        I --> K
+        A[Realms, clients, roles, groups and client scopes]
+        B[Policy and configuration]
+        C[Identity and trust data]
+        A --> B
+        B --> C
     end
 
     subgraph RP[Runtime plane]
         direction TB
-        C[Client or subject]
-        KC[Keycloak trust service]
-        E[Enforcement point]
-        R[Protected resource]
-        C --> KC
-        KC --> E
-        E --> R
+        D[Client or workload]
+        E[Keycloak]
+        F[Gateway or relying party]
+        G[Protected service]
+        D --> E
+        E --> F
+        F --> G
     end
 
     CP --> RP
 ```
 
-## 12.5 Production notes
+## 12.4 Production notes
 
 **Common mistakes**
 
-* Deploying configuration before clarifying authoritative ownership of identities, claims or policies.
-* Accepting default protocol/library behavior without explicit validation requirements.
-* Treating this topic as a one-time setup instead of an operational lifecycle.
+* Single mega-realm for workforce and CIAM.
+* Granting realm-admin broadly for convenience.
+* Pushing every attribute into access token.
 
 **Best practices**
 
-* Define trust, ownership and rollback criteria in writing before rollout.
-* Measure runtime behavior with explicit SLO-oriented signals tied to this chapter's control points.
-* Rehearse failure drills that include both technical and governance decisions.
+* Use per-domain realms with separate signing keys where needed.
+* Define role taxonomy and naming convention early.
+* Use default/optional scopes intentionally by client risk profile.
 
 **Security implications**
 
-Misconfiguration in this area usually creates silent over-trust: tokens accepted in the wrong context, stale identity data, weak assurance reuse, or unverified delegation. These are high-impact because they often preserve application availability while degrading security invisibly.
+Over-privileged composites create silent privilege creep; periodic entitlement review is required.
 
 **Performance implications**
 
-Performance risk comes from hidden remote dependencies and repeated validation work. Cache strategy, timeout policy and token/session lifetimes must be tuned together; otherwise, peak load amplifies control-plane ambiguity into runtime saturation.
+Token bloat from excessive roles/groups affects proxies and mobile clients.
 
-## 12.6 Troubleshooting
+## 12.5 Troubleshooting
 
-If authorizations appear inconsistent, trace composite role inheritance and scope mappings per client. Build troubleshooting as a layered checklist: protocol correctness, cryptographic validation, policy evaluation, then infrastructure health. This ordering avoids premature scaling or unsafe hotfixes.
+* If permission seems inherited unexpectedly, inspect composite role graph.
+* If token too large, trim default scopes and mapper output.
+* If cross-app access leaks, verify client scope assignment boundaries.
 
-## 12.7 Common misconceptions
+## 12.6 Common misconceptions
 
-* More roles do not mean better control; they often indicate missing abstraction.
-* "If it works in a demo, it is production-ready" — false; production requires resilience, observability and governance evidence.
-* "One successful login proves the design" — false; architecture quality is proven across lifecycle events, failure events and audit replay.
+* Groups and roles are interchangeable.
+* Realm count should be minimized at all costs.
+* More claims always improve downstream simplicity.
 
-## 12.8 Interview questions
+## 12.7 Interview questions (graded)
 
 **Beginner**
 
-1. What business problem does this chapter's topic solve in IAM?
-2. Which component in Keycloak is most directly involved?
+- **Q:** What is the primary goal of "Realms, clients, roles, groups and client scopes" in a Keycloak platform?
+- **Expected answer:** Focus on model authorization structures that stay maintainable at enterprise scale.
 
 **Intermediate**
 
-3. Which trust boundary is easiest to misconfigure here, and why?
-4. What telemetry would you add to detect failure early?
+- **Q:** Which failure mode appears first when this area is misconfigured?
+- **Expected answer:** Usually one of: Single mega-realm for workforce and CIAM.
 
 **Senior**
 
-5. How would you design this area for high assurance without breaking developer velocity?
-6. Which trade-offs would you document for auditors and platform owners?
+- **Q:** What design trade-off do you document before rollout for Realms, clients, roles, groups and client scopes?
+- **Expected answer:** Document boundary ownership, rollback plan, and security vs latency trade-offs.
 
 **Expert**
 
-7. Describe a failure mode that remains "green" on infrastructure dashboards but is security-critical.
-8. How would you prove remediation quality after a major incident linked to this domain?
+- **Q:** How do you prove this domain is production-ready under failure?
+- **Expected answer:** By rehearsal with measurable SLO/security outcomes and audited control evidence.
 
-## 12.9 Summary
+## 12.8 Summary
 
-* This chapter's domain is fundamentally about explicit trust and ownership, not only feature enablement.
-* Keycloak implementation quality depends on mapping control-plane clarity to runtime enforcement.
-* Security and performance outcomes are coupled; both must be designed and measured together.
-* Troubleshooting quality improves dramatically when protocol, policy and infrastructure checks are ordered deliberately.
+* Realms, clients, roles, groups and client scopes needs explicit control-plane decisions before runtime tuning.
+* Failure modes are predictable and should be tested deliberately.
+* Security and performance implications must be treated together.
+* Interview-grade answers should combine mechanism detail and operational trade-offs.
 
-## 12.10 References
+## 12.9 References
 
+* Keycloak docs on realms/clients
 * OIDC Core 1.0
 * RFC 8693
 * SCIM RFC 7643
-* Keycloak concepts docs
 
 
 # Chapter 13 — Authentication flows, MFA, WebAuthn and step-up
 
 > **Objectives of this chapter**
-> By the end of it you will be able to: explain why this domain exists in enterprise IAM, use precise vocabulary when designing with Keycloak, map the topic to production controls, diagnose common failure patterns, and answer graded interview questions with architecture-level trade-off reasoning.
+> Design adaptive authentication journeys with assurance-level controls.
 
-## 13.1 Why this chapter matters before implementation
+## 13.1 Why this topic exists (before how)
 
-Authentication strength must be adaptive: low friction for low risk, higher assurance for sensitive operations, all without breaking user journeys. In interviews and production reviews, this topic is usually the boundary between configuration knowledge and architecture accountability: if the underlying rationale is weak, the resulting security model is brittle even when syntax is correct.
+Authentication flows, MFA, WebAuthn and step-up is a recurring source of production risk because teams often optimize for initial setup speed and under-specify lifecycle controls. Senior-level design requires explicit boundaries, failure assumptions and ownership contracts before configuration work starts.
 
-The design principle used in this book remains the same: define trust boundaries, failure modes and ownership first; only then choose Keycloak settings, adapters, proxies or automation patterns. In Keycloak, flow design should combine browser flow branching, conditional executions and authenticator-specific policy without duplicating flows per application.
+## 13.2 Core mechanisms and architecture decisions
 
-## 13.2 Core model and terminology
+* Flow executions are ordered control gates; requirement level (REQUIRED/ALTERNATIVE/CONDITIONAL) changes semantics.
+* WebAuthn offers phishing-resistant MFA with device-bound credentials.
+* Step-up relies on requested context (`acr`) and flow branching.
+* Recovery factors must be designed to avoid social-engineering bypass.
 
-The useful way to reason is to separate **control plane** from **runtime plane**. The control plane defines identities, credentials, policies and metadata ownership. The runtime plane carries protocol exchanges and enforcement decisions under latency and failure constraints. Many outages come from mixing the two and assuming runtime can fix control-plane ambiguity.
+## 13.3 Chapter schema
 
-For this chapter, keep three questions in scope: who is authoritative, what is cryptographically trusted, and where decisions are enforced. If one of these answers is implicit, incident response will be slower and audit evidence will be weaker.
-
-## 13.3 Keycloak implementation perspective
-
-Keycloak should be used as a deterministic trust service, not a collection of ad-hoc toggles. Start with a written contract (issuers, audiences, key material, lifecycle rules, mapper ownership), then encode it consistently in realms, clients, flows and automation.
-
-Operationally, introduce changes with rollback posture: canary realm/client changes, measurable acceptance criteria, and explicit compatibility windows for dependent applications. Security-sensitive defaults should be enforced centrally and reviewed through pull requests rather than direct console edits.
-
-## 13.4 Architecture schema
-
-Schema 13.1 — Control plane and runtime plane for chapter 13
+Schema 13.1 — Authentication flows, MFA, WebAuthn and step-up: control and runtime path
 
 ```mermaid
 flowchart TB
     subgraph CP[Control plane]
         direction TB
-        P[Policy and metadata]
-        I[Identity and credentials]
-        K[Key and trust material]
-        P --> I
-        I --> K
+        A[Authentication flows, MFA, WebAuthn and step-up]
+        B[Policy and configuration]
+        C[Identity and trust data]
+        A --> B
+        B --> C
     end
 
     subgraph RP[Runtime plane]
         direction TB
-        C[Client or subject]
-        KC[Keycloak trust service]
-        E[Enforcement point]
-        R[Protected resource]
-        C --> KC
-        KC --> E
-        E --> R
+        D[Client or workload]
+        E[Keycloak]
+        F[Gateway or relying party]
+        G[Protected service]
+        D --> E
+        E --> F
+        F --> G
     end
 
     CP --> RP
 ```
 
-## 13.5 Production notes
+## 13.4 Production notes
 
 **Common mistakes**
 
-* Deploying configuration before clarifying authoritative ownership of identities, claims or policies.
-* Accepting default protocol/library behavior without explicit validation requirements.
-* Treating this topic as a one-time setup instead of an operational lifecycle.
+* MFA enrollment without recovery policy.
+* Custom authenticators skipping brute-force protections.
+* Using OTP as universal second factor without phishing risk consideration.
 
 **Best practices**
 
-* Define trust, ownership and rollback criteria in writing before rollout.
-* Measure runtime behavior with explicit SLO-oriented signals tied to this chapter's control points.
-* Rehearse failure drills that include both technical and governance decisions.
+* Use WebAuthn where supported, OTP fallback where necessary.
+* Separate enrollment flow from login flow with explicit assurance transitions.
+* Audit factor reset operations as high-risk admin events.
 
 **Security implications**
 
-Misconfiguration in this area usually creates silent over-trust: tokens accepted in the wrong context, stale identity data, weak assurance reuse, or unverified delegation. These are high-impact because they often preserve application availability while degrading security invisibly.
+Account recovery is often the weakest link; strict identity proofing for reset is mandatory.
 
 **Performance implications**
 
-Performance risk comes from hidden remote dependencies and repeated validation work. Cache strategy, timeout policy and token/session lifetimes must be tuned together; otherwise, peak load amplifies control-plane ambiguity into runtime saturation.
+Complex flows increase latency; keep remote dependencies outside critical authenticator steps.
 
-## 13.6 Troubleshooting
+## 13.5 Troubleshooting
 
-If step-up does not trigger, inspect requested `acr` values, flow bindings and conditional execution order. Build troubleshooting as a layered checklist: protocol correctness, cryptographic validation, policy evaluation, then infrastructure health. This ordering avoids premature scaling or unsafe hotfixes.
+* If step-up not triggered, inspect client `acr_values` and flow binding.
+* If WebAuthn fails on specific browsers, inspect RP ID/origin configuration.
+* If MFA prompts loop, inspect execution requirement and cookie/session continuity.
 
-## 13.7 Common misconceptions
+## 13.6 Common misconceptions
 
-* MFA everywhere is not equivalent to risk-based assurance; context and step-up still matter.
-* "If it works in a demo, it is production-ready" — false; production requires resilience, observability and governance evidence.
-* "One successful login proves the design" — false; architecture quality is proven across lifecycle events, failure events and audit replay.
+* Any MFA equals high assurance.
+* WebAuthn removes need for fallback planning.
+* Step-up can be done only in application code.
 
-## 13.8 Interview questions
+## 13.7 Interview questions (graded)
 
 **Beginner**
 
-1. What business problem does this chapter's topic solve in IAM?
-2. Which component in Keycloak is most directly involved?
+- **Q:** What is the primary goal of "Authentication flows, MFA, WebAuthn and step-up" in a Keycloak platform?
+- **Expected answer:** Focus on design adaptive authentication journeys with assurance-level controls.
 
 **Intermediate**
 
-3. Which trust boundary is easiest to misconfigure here, and why?
-4. What telemetry would you add to detect failure early?
+- **Q:** Which failure mode appears first when this area is misconfigured?
+- **Expected answer:** Usually one of: MFA enrollment without recovery policy.
 
 **Senior**
 
-5. How would you design this area for high assurance without breaking developer velocity?
-6. Which trade-offs would you document for auditors and platform owners?
+- **Q:** What design trade-off do you document before rollout for Authentication flows, MFA, WebAuthn and step-up?
+- **Expected answer:** Document boundary ownership, rollback plan, and security vs latency trade-offs.
 
 **Expert**
 
-7. Describe a failure mode that remains "green" on infrastructure dashboards but is security-critical.
-8. How would you prove remediation quality after a major incident linked to this domain?
+- **Q:** How do you prove this domain is production-ready under failure?
+- **Expected answer:** By rehearsal with measurable SLO/security outcomes and audited control evidence.
 
-## 13.9 Summary
+## 13.8 Summary
 
-* This chapter's domain is fundamentally about explicit trust and ownership, not only feature enablement.
-* Keycloak implementation quality depends on mapping control-plane clarity to runtime enforcement.
-* Security and performance outcomes are coupled; both must be designed and measured together.
-* Troubleshooting quality improves dramatically when protocol, policy and infrastructure checks are ordered deliberately.
+* Authentication flows, MFA, WebAuthn and step-up needs explicit control-plane decisions before runtime tuning.
+* Failure modes are predictable and should be tested deliberately.
+* Security and performance implications must be treated together.
+* Interview-grade answers should combine mechanism detail and operational trade-offs.
 
-## 13.10 References
+## 13.9 References
 
 * WebAuthn Level 2
-* FIDO2 CTAP
 * NIST SP 800-63B
-* OIDC acr/amr guidance
+* OIDC Core acr/amr
+* FIDO2 CTAP
 
 
 # Chapter 14 — User federation: LDAP, Active Directory, custom stores
 
 > **Objectives of this chapter**
-> By the end of it you will be able to: explain why this domain exists in enterprise IAM, use precise vocabulary when designing with Keycloak, map the topic to production controls, diagnose common failure patterns, and answer graded interview questions with architecture-level trade-off reasoning.
+> Integrate external identity stores with clear ownership and sync semantics.
 
-## 14.1 Why this chapter matters before implementation
+## 14.1 Why this topic exists (before how)
 
-Federation is chosen to avoid identity data duplication and to preserve authoritative ownership, but synchronization boundaries must be explicit. In interviews and production reviews, this topic is usually the boundary between configuration knowledge and architecture accountability: if the underlying rationale is weak, the resulting security model is brittle even when syntax is correct.
+User federation: LDAP, Active Directory, custom stores is a recurring source of production risk because teams often optimize for initial setup speed and under-specify lifecycle controls. Senior-level design requires explicit boundaries, failure assumptions and ownership contracts before configuration work starts.
 
-The design principle used in this book remains the same: define trust boundaries, failure modes and ownership first; only then choose Keycloak settings, adapters, proxies or automation patterns. Federation implementation should define which attributes are read-only, write-back eligible, or transformed into protocol claims via mappers.
+## 14.2 Core mechanisms and architecture decisions
 
-## 14.2 Core model and terminology
+* Federation modes: import, read-only, unsynced; each changes consistency and outage behavior.
+* Mapper strategy controls canonical username/email/group projection.
+* Custom user storage providers introduce bespoke latency and failure domains.
+* Sync direction must respect authoritative source ownership.
 
-The useful way to reason is to separate **control plane** from **runtime plane**. The control plane defines identities, credentials, policies and metadata ownership. The runtime plane carries protocol exchanges and enforcement decisions under latency and failure constraints. Many outages come from mixing the two and assuming runtime can fix control-plane ambiguity.
+## 14.3 Chapter schema
 
-For this chapter, keep three questions in scope: who is authoritative, what is cryptographically trusted, and where decisions are enforced. If one of these answers is implicit, incident response will be slower and audit evidence will be weaker.
-
-## 14.3 Keycloak implementation perspective
-
-Keycloak should be used as a deterministic trust service, not a collection of ad-hoc toggles. Start with a written contract (issuers, audiences, key material, lifecycle rules, mapper ownership), then encode it consistently in realms, clients, flows and automation.
-
-Operationally, introduce changes with rollback posture: canary realm/client changes, measurable acceptance criteria, and explicit compatibility windows for dependent applications. Security-sensitive defaults should be enforced centrally and reviewed through pull requests rather than direct console edits.
-
-## 14.4 Architecture schema
-
-Schema 14.1 — Control plane and runtime plane for chapter 14
+Schema 14.1 — User federation: LDAP, Active Directory, custom stores: control and runtime path
 
 ```mermaid
 flowchart TB
     subgraph CP[Control plane]
         direction TB
-        P[Policy and metadata]
-        I[Identity and credentials]
-        K[Key and trust material]
-        P --> I
-        I --> K
+        A[User federation: LDAP, Active Directory, custom stores]
+        B[Policy and configuration]
+        C[Identity and trust data]
+        A --> B
+        B --> C
     end
 
     subgraph RP[Runtime plane]
         direction TB
-        C[Client or subject]
-        KC[Keycloak trust service]
-        E[Enforcement point]
-        R[Protected resource]
-        C --> KC
-        KC --> E
-        E --> R
+        D[Client or workload]
+        E[Keycloak]
+        F[Gateway or relying party]
+        G[Protected service]
+        D --> E
+        E --> F
+        F --> G
     end
 
     CP --> RP
 ```
 
-## 14.5 Production notes
+## 14.4 Production notes
 
 **Common mistakes**
 
-* Deploying configuration before clarifying authoritative ownership of identities, claims or policies.
-* Accepting default protocol/library behavior without explicit validation requirements.
-* Treating this topic as a one-time setup instead of an operational lifecycle.
+* Enabling write-back without data stewardship agreement.
+* Assuming LDAP and Keycloak password policies are automatically aligned.
+* Large full sync during business hours.
 
 **Best practices**
 
-* Define trust, ownership and rollback criteria in writing before rollout.
-* Measure runtime behavior with explicit SLO-oriented signals tied to this chapter's control points.
-* Rehearse failure drills that include both technical and governance decisions.
+* Run incremental sync windows and monitor drift metrics.
+* Define conflict resolution for renamed users and duplicate identifiers.
+* Load-test external store timeout behavior.
 
 **Security implications**
 
-Misconfiguration in this area usually creates silent over-trust: tokens accepted in the wrong context, stale identity data, weak assurance reuse, or unverified delegation. These are high-impact because they often preserve application availability while degrading security invisibly.
+Custom store connectors can become privileged backdoors; enforce secure coding and secret storage.
 
 **Performance implications**
 
-Performance risk comes from hidden remote dependencies and repeated validation work. Cache strategy, timeout policy and token/session lifetimes must be tuned together; otherwise, peak load amplifies control-plane ambiguity into runtime saturation.
+External directory latency propagates to login path unless cached thoughtfully.
 
-## 14.6 Troubleshooting
+## 14.5 Troubleshooting
 
-When user attributes are stale, inspect sync schedule direction and mapper write policy. Build troubleshooting as a layered checklist: protocol correctness, cryptographic validation, policy evaluation, then infrastructure health. This ordering avoids premature scaling or unsafe hotfixes.
+* If users disappear, inspect filter/base DN changes.
+* If updates are lost, inspect edit mode and mapper write flags.
+* If login spikes timeout, inspect connection pool and directory limits.
 
-## 14.7 Common misconceptions
+## 14.6 Common misconceptions
 
-* Federation does not remove identity governance requirements; it changes where governance is enforced.
-* "If it works in a demo, it is production-ready" — false; production requires resilience, observability and governance evidence.
-* "One successful login proves the design" — false; architecture quality is proven across lifecycle events, failure events and audit replay.
+* Federation means no lifecycle governance needed.
+* Import mode and live mode have same risk profile.
+* Custom store plugins are low-impact glue code.
 
-## 14.8 Interview questions
+## 14.7 Interview questions (graded)
 
 **Beginner**
 
-1. What business problem does this chapter's topic solve in IAM?
-2. Which component in Keycloak is most directly involved?
+- **Q:** What is the primary goal of "User federation: LDAP, Active Directory, custom stores" in a Keycloak platform?
+- **Expected answer:** Focus on integrate external identity stores with clear ownership and sync semantics.
 
 **Intermediate**
 
-3. Which trust boundary is easiest to misconfigure here, and why?
-4. What telemetry would you add to detect failure early?
+- **Q:** Which failure mode appears first when this area is misconfigured?
+- **Expected answer:** Usually one of: Enabling write-back without data stewardship agreement.
 
 **Senior**
 
-5. How would you design this area for high assurance without breaking developer velocity?
-6. Which trade-offs would you document for auditors and platform owners?
+- **Q:** What design trade-off do you document before rollout for User federation: LDAP, Active Directory, custom stores?
+- **Expected answer:** Document boundary ownership, rollback plan, and security vs latency trade-offs.
 
 **Expert**
 
-7. Describe a failure mode that remains "green" on infrastructure dashboards but is security-critical.
-8. How would you prove remediation quality after a major incident linked to this domain?
+- **Q:** How do you prove this domain is production-ready under failure?
+- **Expected answer:** By rehearsal with measurable SLO/security outcomes and audited control evidence.
 
-## 14.9 Summary
+## 14.8 Summary
 
-* This chapter's domain is fundamentally about explicit trust and ownership, not only feature enablement.
-* Keycloak implementation quality depends on mapping control-plane clarity to runtime enforcement.
-* Security and performance outcomes are coupled; both must be designed and measured together.
-* Troubleshooting quality improves dramatically when protocol, policy and infrastructure checks are ordered deliberately.
+* User federation: LDAP, Active Directory, custom stores needs explicit control-plane decisions before runtime tuning.
+* Failure modes are predictable and should be tested deliberately.
+* Security and performance implications must be treated together.
+* Interview-grade answers should combine mechanism detail and operational trade-offs.
 
-## 14.10 References
+## 14.9 References
 
 * RFC 4511
 * RFC 4513
@@ -2255,120 +2191,115 @@ When user attributes are stale, inspect sync schedule direction and mapper write
 # Chapter 15 — Identity brokering and multi-tenancy
 
 > **Objectives of this chapter**
-> By the end of it you will be able to: explain why this domain exists in enterprise IAM, use precise vocabulary when designing with Keycloak, map the topic to production controls, diagnose common failure patterns, and answer graded interview questions with architecture-level trade-off reasoning.
+> Operate multiple trust domains and tenant boundaries safely.
 
-## 15.1 Why this chapter matters before implementation
+## 15.1 Why this topic exists (before how)
 
-Brokering and tenant isolation are required when one platform serves multiple trust domains with independent policy and lifecycle ownership. In interviews and production reviews, this topic is usually the boundary between configuration knowledge and architecture accountability: if the underlying rationale is weak, the resulting security model is brittle even when syntax is correct.
+Identity brokering and multi-tenancy is a recurring source of production risk because teams often optimize for initial setup speed and under-specify lifecycle controls. Senior-level design requires explicit boundaries, failure assumptions and ownership contracts before configuration work starts.
 
-The design principle used in this book remains the same: define trust boundaries, failure modes and ownership first; only then choose Keycloak settings, adapters, proxies or automation patterns. Design each tenant boundary explicitly: realm-level isolation, theme branding, key material separation, and broker-specific mapper policies.
+## 15.2 Core mechanisms and architecture decisions
 
-## 15.2 Core model and terminology
+* Identity brokering translates external IdP assertions to local identity model.
+* Account linking policy (first-login flow) defines takeover risk.
+* Tenant isolation can be realm-based, cluster-based, or hybrid depending risk.
+* Per-tenant branding and policy must not weaken shared security baselines.
 
-The useful way to reason is to separate **control plane** from **runtime plane**. The control plane defines identities, credentials, policies and metadata ownership. The runtime plane carries protocol exchanges and enforcement decisions under latency and failure constraints. Many outages come from mixing the two and assuming runtime can fix control-plane ambiguity.
+## 15.3 Chapter schema
 
-For this chapter, keep three questions in scope: who is authoritative, what is cryptographically trusted, and where decisions are enforced. If one of these answers is implicit, incident response will be slower and audit evidence will be weaker.
-
-## 15.3 Keycloak implementation perspective
-
-Keycloak should be used as a deterministic trust service, not a collection of ad-hoc toggles. Start with a written contract (issuers, audiences, key material, lifecycle rules, mapper ownership), then encode it consistently in realms, clients, flows and automation.
-
-Operationally, introduce changes with rollback posture: canary realm/client changes, measurable acceptance criteria, and explicit compatibility windows for dependent applications. Security-sensitive defaults should be enforced centrally and reviewed through pull requests rather than direct console edits.
-
-## 15.4 Architecture schema
-
-Schema 15.1 — Control plane and runtime plane for chapter 15
+Schema 15.1 — Identity brokering and multi-tenancy: control and runtime path
 
 ```mermaid
 flowchart TB
     subgraph CP[Control plane]
         direction TB
-        P[Policy and metadata]
-        I[Identity and credentials]
-        K[Key and trust material]
-        P --> I
-        I --> K
+        A[Identity brokering and multi-tenancy]
+        B[Policy and configuration]
+        C[Identity and trust data]
+        A --> B
+        B --> C
     end
 
     subgraph RP[Runtime plane]
         direction TB
-        C[Client or subject]
-        KC[Keycloak trust service]
-        E[Enforcement point]
-        R[Protected resource]
-        C --> KC
-        KC --> E
-        E --> R
+        D[Client or workload]
+        E[Keycloak]
+        F[Gateway or relying party]
+        G[Protected service]
+        D --> E
+        E --> F
+        F --> G
     end
 
     CP --> RP
 ```
 
-## 15.5 Production notes
+## 15.4 Production notes
 
 **Common mistakes**
 
-* Deploying configuration before clarifying authoritative ownership of identities, claims or policies.
-* Accepting default protocol/library behavior without explicit validation requirements.
-* Treating this topic as a one-time setup instead of an operational lifecycle.
+* Auto-linking accounts by email without verification.
+* Shared admin roles across tenants.
+* Single signing key for tenants with different compliance tiers.
 
 **Best practices**
 
-* Define trust, ownership and rollback criteria in writing before rollout.
-* Measure runtime behavior with explicit SLO-oriented signals tied to this chapter's control points.
-* Rehearse failure drills that include both technical and governance decisions.
+* Use immutable upstream subject for linking when available.
+* Isolate high-risk tenants by realm and optionally infrastructure.
+* Template broker configs via code to avoid manual drift.
 
 **Security implications**
 
-Misconfiguration in this area usually creates silent over-trust: tokens accepted in the wrong context, stale identity data, weak assurance reuse, or unverified delegation. These are high-impact because they often preserve application availability while degrading security invisibly.
+Broker trust misconfiguration can import fraudulent identities; strict issuer and signature checks are required.
 
 **Performance implications**
 
-Performance risk comes from hidden remote dependencies and repeated validation work. Cache strategy, timeout policy and token/session lifetimes must be tuned together; otherwise, peak load amplifies control-plane ambiguity into runtime saturation.
+Many upstream IdPs increase metadata and key-refresh overhead.
 
-## 15.6 Troubleshooting
+## 15.5 Troubleshooting
 
-If tenant leakage is suspected, audit realm/client mapper reuse and broker identity-link configuration. Build troubleshooting as a layered checklist: protocol correctness, cryptographic validation, policy evaluation, then infrastructure health. This ordering avoids premature scaling or unsafe hotfixes.
+* If wrong account linked, inspect first-login flow and mapper precedence.
+* If one tenant impacts another, inspect cache/key/admin boundary leakage.
+* If broker login fails after upstream change, inspect metadata/issuer mismatch.
 
-## 15.7 Common misconceptions
+## 15.6 Common misconceptions
 
-* Multi-tenancy is not only theming; it is a trust and blast-radius design decision.
-* "If it works in a demo, it is production-ready" — false; production requires resilience, observability and governance evidence.
-* "One successful login proves the design" — false; architecture quality is proven across lifecycle events, failure events and audit replay.
+* Multi-tenancy is mostly UI theming.
+* Brokered identity is equal assurance by default.
+* Email is always a stable global key.
 
-## 15.8 Interview questions
+## 15.7 Interview questions (graded)
 
 **Beginner**
 
-1. What business problem does this chapter's topic solve in IAM?
-2. Which component in Keycloak is most directly involved?
+- **Q:** What is the primary goal of "Identity brokering and multi-tenancy" in a Keycloak platform?
+- **Expected answer:** Focus on operate multiple trust domains and tenant boundaries safely.
 
 **Intermediate**
 
-3. Which trust boundary is easiest to misconfigure here, and why?
-4. What telemetry would you add to detect failure early?
+- **Q:** Which failure mode appears first when this area is misconfigured?
+- **Expected answer:** Usually one of: Auto-linking accounts by email without verification.
 
 **Senior**
 
-5. How would you design this area for high assurance without breaking developer velocity?
-6. Which trade-offs would you document for auditors and platform owners?
+- **Q:** What design trade-off do you document before rollout for Identity brokering and multi-tenancy?
+- **Expected answer:** Document boundary ownership, rollback plan, and security vs latency trade-offs.
 
 **Expert**
 
-7. Describe a failure mode that remains "green" on infrastructure dashboards but is security-critical.
-8. How would you prove remediation quality after a major incident linked to this domain?
+- **Q:** How do you prove this domain is production-ready under failure?
+- **Expected answer:** By rehearsal with measurable SLO/security outcomes and audited control evidence.
 
-## 15.9 Summary
+## 15.8 Summary
 
-* This chapter's domain is fundamentally about explicit trust and ownership, not only feature enablement.
-* Keycloak implementation quality depends on mapping control-plane clarity to runtime enforcement.
-* Security and performance outcomes are coupled; both must be designed and measured together.
-* Troubleshooting quality improves dramatically when protocol, policy and infrastructure checks are ordered deliberately.
+* Identity brokering and multi-tenancy needs explicit control-plane decisions before runtime tuning.
+* Failure modes are predictable and should be tested deliberately.
+* Security and performance implications must be treated together.
+* Interview-grade answers should combine mechanism detail and operational trade-offs.
 
-## 15.10 References
+## 15.9 References
 
 * OIDC Federation draft
-* SAML metadata profile
+* SAML metadata profiles
 * RFC 8707
 * Keycloak broker docs
 
@@ -2376,722 +2307,692 @@ If tenant leakage is suspected, audit realm/client mapper reuse and broker ident
 # Chapter 16 — Authorization Services (ABAC, UMA 2.0) and external policy engines
 
 > **Objectives of this chapter**
-> By the end of it you will be able to: explain why this domain exists in enterprise IAM, use precise vocabulary when designing with Keycloak, map the topic to production controls, diagnose common failure patterns, and answer graded interview questions with architecture-level trade-off reasoning.
+> Implement fine-grained policy decisions and delegation patterns.
 
-## 16.1 Why this chapter matters before implementation
+## 16.1 Why this topic exists (before how)
 
-Fine-grained authorization is needed when role-only control cannot express resource ownership, delegation and contextual constraints. In interviews and production reviews, this topic is usually the boundary between configuration knowledge and architecture accountability: if the underlying rationale is weak, the resulting security model is brittle even when syntax is correct.
+Authorization Services (ABAC, UMA 2.0) and external policy engines is a recurring source of production risk because teams often optimize for initial setup speed and under-specify lifecycle controls. Senior-level design requires explicit boundaries, failure assumptions and ownership contracts before configuration work starts.
 
-The design principle used in this book remains the same: define trust boundaries, failure modes and ownership first; only then choose Keycloak settings, adapters, proxies or automation patterns. Authorization Services should be used where resource ownership and context matter; external PDPs are preferable when policy unification spans many products.
+## 16.2 Core mechanisms and architecture decisions
 
-## 16.2 Core model and terminology
+* Keycloak Authorization Services model resources, scopes, policies, permissions.
+* UMA 2.0 enables resource-owner driven sharing and consent-like delegation.
+* External PDP (OPA/XACML) helps unify policy across products.
+* Decision input quality (subject/action/resource/context) determines policy quality.
 
-The useful way to reason is to separate **control plane** from **runtime plane**. The control plane defines identities, credentials, policies and metadata ownership. The runtime plane carries protocol exchanges and enforcement decisions under latency and failure constraints. Many outages come from mixing the two and assuming runtime can fix control-plane ambiguity.
+## 16.3 Chapter schema
 
-For this chapter, keep three questions in scope: who is authoritative, what is cryptographically trusted, and where decisions are enforced. If one of these answers is implicit, incident response will be slower and audit evidence will be weaker.
-
-## 16.3 Keycloak implementation perspective
-
-Keycloak should be used as a deterministic trust service, not a collection of ad-hoc toggles. Start with a written contract (issuers, audiences, key material, lifecycle rules, mapper ownership), then encode it consistently in realms, clients, flows and automation.
-
-Operationally, introduce changes with rollback posture: canary realm/client changes, measurable acceptance criteria, and explicit compatibility windows for dependent applications. Security-sensitive defaults should be enforced centrally and reviewed through pull requests rather than direct console edits.
-
-## 16.4 Architecture schema
-
-Schema 16.1 — Control plane and runtime plane for chapter 16
+Schema 16.1 — Authorization Services (ABAC, UMA 2.0) and external policy engines: control and runtime path
 
 ```mermaid
 flowchart TB
     subgraph CP[Control plane]
         direction TB
-        P[Policy and metadata]
-        I[Identity and credentials]
-        K[Key and trust material]
-        P --> I
-        I --> K
+        A[Authorization Services (ABAC, UMA 2.0) and external policy engines]
+        B[Policy and configuration]
+        C[Identity and trust data]
+        A --> B
+        B --> C
     end
 
     subgraph RP[Runtime plane]
         direction TB
-        C[Client or subject]
-        KC[Keycloak trust service]
-        E[Enforcement point]
-        R[Protected resource]
-        C --> KC
-        KC --> E
-        E --> R
+        D[Client or workload]
+        E[Keycloak]
+        F[Gateway or relying party]
+        G[Protected service]
+        D --> E
+        E --> F
+        F --> G
     end
 
     CP --> RP
 ```
 
-## 16.5 Production notes
+## 16.4 Production notes
 
 **Common mistakes**
 
-* Deploying configuration before clarifying authoritative ownership of identities, claims or policies.
-* Accepting default protocol/library behavior without explicit validation requirements.
-* Treating this topic as a one-time setup instead of an operational lifecycle.
+* Hard-coding resource IDs inside policies without lifecycle process.
+* Combining role and attribute policies without test coverage.
+* Returning permit on PDP errors for availability.
 
 **Best practices**
 
-* Define trust, ownership and rollback criteria in writing before rollout.
-* Measure runtime behavior with explicit SLO-oriented signals tied to this chapter's control points.
-* Rehearse failure drills that include both technical and governance decisions.
+* Version policies and test with scenario matrix.
+* Default to deny on decision ambiguity.
+* Log decision context for forensic replay.
 
 **Security implications**
 
-Misconfiguration in this area usually creates silent over-trust: tokens accepted in the wrong context, stale identity data, weak assurance reuse, or unverified delegation. These are high-impact because they often preserve application availability while degrading security invisibly.
+Policy engines can unintentionally leak sensitive attributes in decision logs; sanitize context payloads.
 
 **Performance implications**
 
-Performance risk comes from hidden remote dependencies and repeated validation work. Cache strategy, timeout policy and token/session lifetimes must be tuned together; otherwise, peak load amplifies control-plane ambiguity into runtime saturation.
+Fine-grained policy calls add latency; cache where correctness permits.
 
-## 16.6 Troubleshooting
+## 16.5 Troubleshooting
 
-When policy decisions seem random, capture the exact input context sent to the PDP and replay deterministically. Build troubleshooting as a layered checklist: protocol correctness, cryptographic validation, policy evaluation, then infrastructure health. This ordering avoids premature scaling or unsafe hotfixes.
+* If permit/deny seems random, replay exact input context against policy version.
+* If UMA sharing fails, inspect permission ticket flow.
+* If external PDP times out, inspect fallback mode and circuit breakers.
 
-## 16.7 Common misconceptions
+## 16.6 Common misconceptions
 
-* External policy engines do not replace identity issuance; they complement decision logic.
-* "If it works in a demo, it is production-ready" — false; production requires resilience, observability and governance evidence.
-* "One successful login proves the design" — false; architecture quality is proven across lifecycle events, failure events and audit replay.
+* ABAC replaces need for RBAC.
+* Policy engine uptime is less critical than IdP uptime.
+* Authorization logs are optional.
 
-## 16.8 Interview questions
+## 16.7 Interview questions (graded)
 
 **Beginner**
 
-1. What business problem does this chapter's topic solve in IAM?
-2. Which component in Keycloak is most directly involved?
+- **Q:** What is the primary goal of "Authorization Services (ABAC, UMA 2.0) and external policy engines" in a Keycloak platform?
+- **Expected answer:** Focus on implement fine-grained policy decisions and delegation patterns.
 
 **Intermediate**
 
-3. Which trust boundary is easiest to misconfigure here, and why?
-4. What telemetry would you add to detect failure early?
+- **Q:** Which failure mode appears first when this area is misconfigured?
+- **Expected answer:** Usually one of: Hard-coding resource IDs inside policies without lifecycle process.
 
 **Senior**
 
-5. How would you design this area for high assurance without breaking developer velocity?
-6. Which trade-offs would you document for auditors and platform owners?
+- **Q:** What design trade-off do you document before rollout for Authorization Services (ABAC, UMA 2.0) and external policy engines?
+- **Expected answer:** Document boundary ownership, rollback plan, and security vs latency trade-offs.
 
 **Expert**
 
-7. Describe a failure mode that remains "green" on infrastructure dashboards but is security-critical.
-8. How would you prove remediation quality after a major incident linked to this domain?
+- **Q:** How do you prove this domain is production-ready under failure?
+- **Expected answer:** By rehearsal with measurable SLO/security outcomes and audited control evidence.
 
-## 16.9 Summary
+## 16.8 Summary
 
-* This chapter's domain is fundamentally about explicit trust and ownership, not only feature enablement.
-* Keycloak implementation quality depends on mapping control-plane clarity to runtime enforcement.
-* Security and performance outcomes are coupled; both must be designed and measured together.
-* Troubleshooting quality improves dramatically when protocol, policy and infrastructure checks are ordered deliberately.
+* Authorization Services (ABAC, UMA 2.0) and external policy engines needs explicit control-plane decisions before runtime tuning.
+* Failure modes are predictable and should be tested deliberately.
+* Security and performance implications must be treated together.
+* Interview-grade answers should combine mechanism detail and operational trade-offs.
 
-## 16.10 References
+## 16.9 References
 
 * UMA 2.0
 * RFC 7662
 * XACML 3.0
-* OPA/Rego docs
+* OPA docs
 
 
 # Chapter 17 — Deployment on RHEL, containers, Kubernetes and OpenShift
 
 > **Objectives of this chapter**
-> By the end of it you will be able to: explain why this domain exists in enterprise IAM, use precise vocabulary when designing with Keycloak, map the topic to production controls, diagnose common failure patterns, and answer graded interview questions with architecture-level trade-off reasoning.
+> Select deployment patterns aligned to reliability and security operations.
 
-## 17.1 Why this chapter matters before implementation
+## 17.1 Why this topic exists (before how)
 
-Deployment form factors encode operational risk: packaging, secret handling and upgrade methods directly affect security and uptime. In interviews and production reviews, this topic is usually the boundary between configuration knowledge and architecture accountability: if the underlying rationale is weak, the resulting security model is brittle even when syntax is correct.
+Deployment on RHEL, containers, Kubernetes and OpenShift is a recurring source of production risk because teams often optimize for initial setup speed and under-specify lifecycle controls. Senior-level design requires explicit boundaries, failure assumptions and ownership contracts before configuration work starts.
 
-The design principle used in this book remains the same: define trust boundaries, failure modes and ownership first; only then choose Keycloak settings, adapters, proxies or automation patterns. Choose deployment topology based on lifecycle automation, certificate supply chain, secret storage model and team operational maturity.
+## 17.2 Core mechanisms and architecture decisions
 
-## 17.2 Core model and terminology
+* Runtime packaging affects patching velocity and operational consistency.
+* Kubernetes/OpenShift deployment requires probes, resource limits, and secret integration.
+* RHEL/bare-metal installs may fit strict environments with established ops controls.
+* PostgreSQL placement and network topology directly impact auth latency.
 
-The useful way to reason is to separate **control plane** from **runtime plane**. The control plane defines identities, credentials, policies and metadata ownership. The runtime plane carries protocol exchanges and enforcement decisions under latency and failure constraints. Many outages come from mixing the two and assuming runtime can fix control-plane ambiguity.
+## 17.3 Chapter schema
 
-For this chapter, keep three questions in scope: who is authoritative, what is cryptographically trusted, and where decisions are enforced. If one of these answers is implicit, incident response will be slower and audit evidence will be weaker.
-
-## 17.3 Keycloak implementation perspective
-
-Keycloak should be used as a deterministic trust service, not a collection of ad-hoc toggles. Start with a written contract (issuers, audiences, key material, lifecycle rules, mapper ownership), then encode it consistently in realms, clients, flows and automation.
-
-Operationally, introduce changes with rollback posture: canary realm/client changes, measurable acceptance criteria, and explicit compatibility windows for dependent applications. Security-sensitive defaults should be enforced centrally and reviewed through pull requests rather than direct console edits.
-
-## 17.4 Architecture schema
-
-Schema 17.1 — Control plane and runtime plane for chapter 17
+Schema 17.1 — Deployment on RHEL, containers, Kubernetes and OpenShift: control and runtime path
 
 ```mermaid
 flowchart TB
     subgraph CP[Control plane]
         direction TB
-        P[Policy and metadata]
-        I[Identity and credentials]
-        K[Key and trust material]
-        P --> I
-        I --> K
+        A[Deployment on RHEL, containers, Kubernetes and OpenShift]
+        B[Policy and configuration]
+        C[Identity and trust data]
+        A --> B
+        B --> C
     end
 
     subgraph RP[Runtime plane]
         direction TB
-        C[Client or subject]
-        KC[Keycloak trust service]
-        E[Enforcement point]
-        R[Protected resource]
-        C --> KC
-        KC --> E
-        E --> R
+        D[Client or workload]
+        E[Keycloak]
+        F[Gateway or relying party]
+        G[Protected service]
+        D --> E
+        E --> F
+        F --> G
     end
 
     CP --> RP
 ```
 
-## 17.5 Production notes
+## 17.4 Production notes
 
 **Common mistakes**
 
-* Deploying configuration before clarifying authoritative ownership of identities, claims or policies.
-* Accepting default protocol/library behavior without explicit validation requirements.
-* Treating this topic as a one-time setup instead of an operational lifecycle.
+* Running with ephemeral DB in production-like envs.
+* No liveness/readiness distinction causing restart storms.
+* Secrets mounted with excessive file permissions.
 
 **Best practices**
 
-* Define trust, ownership and rollback criteria in writing before rollout.
-* Measure runtime behavior with explicit SLO-oriented signals tied to this chapter's control points.
-* Rehearse failure drills that include both technical and governance decisions.
+* Use immutable images and signed supply chain.
+* Separate startup, readiness and liveness probe thresholds.
+* Externalize secrets to platform-native secure stores.
 
 **Security implications**
 
-Misconfiguration in this area usually creates silent over-trust: tokens accepted in the wrong context, stale identity data, weak assurance reuse, or unverified delegation. These are high-impact because they often preserve application availability while degrading security invisibly.
+Container image provenance and runtime privileges are major attack surfaces.
 
 **Performance implications**
 
-Performance risk comes from hidden remote dependencies and repeated validation work. Cache strategy, timeout policy and token/session lifetimes must be tuned together; otherwise, peak load amplifies control-plane ambiguity into runtime saturation.
+Cold starts and JVM warm-up can distort autoscaling decisions.
 
-## 17.6 Troubleshooting
+## 17.5 Troubleshooting
 
-If pods restart under load, inspect JVM memory limits and startup probe thresholds before increasing replica count. Build troubleshooting as a layered checklist: protocol correctness, cryptographic validation, policy evaluation, then infrastructure health. This ordering avoids premature scaling or unsafe hotfixes.
+* If rollout stalls, inspect readiness deps (DB, cache, DNS).
+* If pods OOM, inspect heap vs container limits.
+* If TLS fails after ingress change, inspect trust/termination chain.
 
-## 17.7 Common misconceptions
+## 17.6 Common misconceptions
 
-* Containerization does not automatically deliver production readiness; operational controls still decide reliability.
-* "If it works in a demo, it is production-ready" — false; production requires resilience, observability and governance evidence.
-* "One successful login proves the design" — false; architecture quality is proven across lifecycle events, failure events and audit replay.
+* Kubernetes deployment automatically equals HA.
+* One Helm chart works unchanged for all environments.
+* Container restarts are harmless noise.
 
-## 17.8 Interview questions
+## 17.7 Interview questions (graded)
 
 **Beginner**
 
-1. What business problem does this chapter's topic solve in IAM?
-2. Which component in Keycloak is most directly involved?
+- **Q:** What is the primary goal of "Deployment on RHEL, containers, Kubernetes and OpenShift" in a Keycloak platform?
+- **Expected answer:** Focus on select deployment patterns aligned to reliability and security operations.
 
 **Intermediate**
 
-3. Which trust boundary is easiest to misconfigure here, and why?
-4. What telemetry would you add to detect failure early?
+- **Q:** Which failure mode appears first when this area is misconfigured?
+- **Expected answer:** Usually one of: Running with ephemeral DB in production-like envs.
 
 **Senior**
 
-5. How would you design this area for high assurance without breaking developer velocity?
-6. Which trade-offs would you document for auditors and platform owners?
+- **Q:** What design trade-off do you document before rollout for Deployment on RHEL, containers, Kubernetes and OpenShift?
+- **Expected answer:** Document boundary ownership, rollback plan, and security vs latency trade-offs.
 
 **Expert**
 
-7. Describe a failure mode that remains "green" on infrastructure dashboards but is security-critical.
-8. How would you prove remediation quality after a major incident linked to this domain?
+- **Q:** How do you prove this domain is production-ready under failure?
+- **Expected answer:** By rehearsal with measurable SLO/security outcomes and audited control evidence.
 
-## 17.9 Summary
+## 17.8 Summary
 
-* This chapter's domain is fundamentally about explicit trust and ownership, not only feature enablement.
-* Keycloak implementation quality depends on mapping control-plane clarity to runtime enforcement.
-* Security and performance outcomes are coupled; both must be designed and measured together.
-* Troubleshooting quality improves dramatically when protocol, policy and infrastructure checks are ordered deliberately.
+* Deployment on RHEL, containers, Kubernetes and OpenShift needs explicit control-plane decisions before runtime tuning.
+* Failure modes are predictable and should be tested deliberately.
+* Security and performance implications must be treated together.
+* Interview-grade answers should combine mechanism detail and operational trade-offs.
 
-## 17.10 References
+## 17.9 References
 
-* OCI image spec
-* Kubernetes API conventions
+* Kubernetes docs
 * OpenShift docs
+* OCI image spec
 * CIS benchmarks
 
 
 # Chapter 18 — High availability, clustering and multi-site
 
 > **Objectives of this chapter**
-> By the end of it you will be able to: explain why this domain exists in enterprise IAM, use precise vocabulary when designing with Keycloak, map the topic to production controls, diagnose common failure patterns, and answer graded interview questions with architecture-level trade-off reasoning.
+> Engineer resilience across node, zone and site failures.
 
-## 18.1 Why this chapter matters before implementation
+## 18.1 Why this topic exists (before how)
 
-HA architecture is driven by failure domains, not by node count; identity outage is a business outage, so design must assume partial failure. In interviews and production reviews, this topic is usually the boundary between configuration knowledge and architecture accountability: if the underlying rationale is weak, the resulting security model is brittle even when syntax is correct.
+High availability, clustering and multi-site is a recurring source of production risk because teams often optimize for initial setup speed and under-specify lifecycle controls. Senior-level design requires explicit boundaries, failure assumptions and ownership contracts before configuration work starts.
 
-The design principle used in this book remains the same: define trust boundaries, failure modes and ownership first; only then choose Keycloak settings, adapters, proxies or automation patterns. Cluster design must align cache mode, sticky session strategy, DB failover behavior and cross-site RPO/RTO objectives.
+## 18.2 Core mechanisms and architecture decisions
 
-## 18.2 Core model and terminology
+* HA requires redundancy in app, cache, DB, and network planes.
+* Session replication strategy and sticky sessions influence failover behavior.
+* Multi-site adds consistency/latency trade-offs beyond single-cluster HA.
+* RTO/RPO objectives must map to technical controls and tested runbooks.
 
-The useful way to reason is to separate **control plane** from **runtime plane**. The control plane defines identities, credentials, policies and metadata ownership. The runtime plane carries protocol exchanges and enforcement decisions under latency and failure constraints. Many outages come from mixing the two and assuming runtime can fix control-plane ambiguity.
+## 18.3 Chapter schema
 
-For this chapter, keep three questions in scope: who is authoritative, what is cryptographically trusted, and where decisions are enforced. If one of these answers is implicit, incident response will be slower and audit evidence will be weaker.
-
-## 18.3 Keycloak implementation perspective
-
-Keycloak should be used as a deterministic trust service, not a collection of ad-hoc toggles. Start with a written contract (issuers, audiences, key material, lifecycle rules, mapper ownership), then encode it consistently in realms, clients, flows and automation.
-
-Operationally, introduce changes with rollback posture: canary realm/client changes, measurable acceptance criteria, and explicit compatibility windows for dependent applications. Security-sensitive defaults should be enforced centrally and reviewed through pull requests rather than direct console edits.
-
-## 18.4 Architecture schema
-
-Schema 18.1 — Control plane and runtime plane for chapter 18
+Schema 18.1 — High availability, clustering and multi-site: control and runtime path
 
 ```mermaid
 flowchart TB
     subgraph CP[Control plane]
         direction TB
-        P[Policy and metadata]
-        I[Identity and credentials]
-        K[Key and trust material]
-        P --> I
-        I --> K
+        A[High availability, clustering and multi-site]
+        B[Policy and configuration]
+        C[Identity and trust data]
+        A --> B
+        B --> C
     end
 
     subgraph RP[Runtime plane]
         direction TB
-        C[Client or subject]
-        KC[Keycloak trust service]
-        E[Enforcement point]
-        R[Protected resource]
-        C --> KC
-        KC --> E
-        E --> R
+        D[Client or workload]
+        E[Keycloak]
+        F[Gateway or relying party]
+        G[Protected service]
+        D --> E
+        E --> F
+        F --> G
     end
 
     CP --> RP
 ```
 
-## 18.5 Production notes
+## 18.4 Production notes
 
 **Common mistakes**
 
-* Deploying configuration before clarifying authoritative ownership of identities, claims or policies.
-* Accepting default protocol/library behavior without explicit validation requirements.
-* Treating this topic as a one-time setup instead of an operational lifecycle.
+* Active-active without data-conflict strategy.
+* Assuming DB failover is instantaneous and transparent.
+* Skipping regional disaster game-days.
 
 **Best practices**
 
-* Define trust, ownership and rollback criteria in writing before rollout.
-* Measure runtime behavior with explicit SLO-oriented signals tied to this chapter's control points.
-* Rehearse failure drills that include both technical and governance decisions.
+* Define failure domains and quorum assumptions explicitly.
+* Test zone and site failovers with synthetic auth traffic.
+* Keep key material replicated with secure controls.
 
 **Security implications**
 
-Misconfiguration in this area usually creates silent over-trust: tokens accepted in the wrong context, stale identity data, weak assurance reuse, or unverified delegation. These are high-impact because they often preserve application availability while degrading security invisibly.
+Failover paths can bypass hardened routes if not tested (e.g., emergency endpoints).
 
 **Performance implications**
 
-Performance risk comes from hidden remote dependencies and repeated validation work. Cache strategy, timeout policy and token/session lifetimes must be tuned together; otherwise, peak load amplifies control-plane ambiguity into runtime saturation.
+Cross-site replication can add write latency and stale-read windows.
 
-## 18.6 Troubleshooting
+## 18.5 Troubleshooting
 
-In cross-site tests, measure cache replication lag and DB failover promotion time against declared RTO/RPO. Build troubleshooting as a layered checklist: protocol correctness, cryptographic validation, policy evaluation, then infrastructure health. This ordering avoids premature scaling or unsafe hotfixes.
+* If failover works for app but not login, inspect cache/session persistence.
+* If split-brain symptoms appear, inspect cluster membership/quorum events.
+* If DR restore works but tokens fail, inspect signing key continuity.
 
-## 18.7 Common misconceptions
+## 18.6 Common misconceptions
 
-* Active-active without strict data and key strategy can increase inconsistency risk.
-* "If it works in a demo, it is production-ready" — false; production requires resilience, observability and governance evidence.
-* "One successful login proves the design" — false; architecture quality is proven across lifecycle events, failure events and audit replay.
+* More nodes always mean more availability.
+* HA is complete when pods run in two zones.
+* DR backups alone prove resilience.
 
-## 18.8 Interview questions
+## 18.7 Interview questions (graded)
 
 **Beginner**
 
-1. What business problem does this chapter's topic solve in IAM?
-2. Which component in Keycloak is most directly involved?
+- **Q:** What is the primary goal of "High availability, clustering and multi-site" in a Keycloak platform?
+- **Expected answer:** Focus on engineer resilience across node, zone and site failures.
 
 **Intermediate**
 
-3. Which trust boundary is easiest to misconfigure here, and why?
-4. What telemetry would you add to detect failure early?
+- **Q:** Which failure mode appears first when this area is misconfigured?
+- **Expected answer:** Usually one of: Active-active without data-conflict strategy.
 
 **Senior**
 
-5. How would you design this area for high assurance without breaking developer velocity?
-6. Which trade-offs would you document for auditors and platform owners?
+- **Q:** What design trade-off do you document before rollout for High availability, clustering and multi-site?
+- **Expected answer:** Document boundary ownership, rollback plan, and security vs latency trade-offs.
 
 **Expert**
 
-7. Describe a failure mode that remains "green" on infrastructure dashboards but is security-critical.
-8. How would you prove remediation quality after a major incident linked to this domain?
+- **Q:** How do you prove this domain is production-ready under failure?
+- **Expected answer:** By rehearsal with measurable SLO/security outcomes and audited control evidence.
 
-## 18.9 Summary
+## 18.8 Summary
 
-* This chapter's domain is fundamentally about explicit trust and ownership, not only feature enablement.
-* Keycloak implementation quality depends on mapping control-plane clarity to runtime enforcement.
-* Security and performance outcomes are coupled; both must be designed and measured together.
-* Troubleshooting quality improves dramatically when protocol, policy and infrastructure checks are ordered deliberately.
+* High availability, clustering and multi-site needs explicit control-plane decisions before runtime tuning.
+* Failure modes are predictable and should be tested deliberately.
+* Security and performance implications must be treated together.
+* Interview-grade answers should combine mechanism detail and operational trade-offs.
 
-## 18.10 References
+## 18.9 References
 
 * Infinispan cross-site docs
 * PostgreSQL HA docs
-* RFC 1994
 * NIST SP 800-34
+* Keycloak HA guidance
 
 
 # Chapter 19 — Reverse proxies and API Gateways
 
 > **Objectives of this chapter**
-> By the end of it you will be able to: explain why this domain exists in enterprise IAM, use precise vocabulary when designing with Keycloak, map the topic to production controls, diagnose common failure patterns, and answer graded interview questions with architecture-level trade-off reasoning.
+> Enforce token, transport and routing policy at the edge.
 
-## 19.1 Why this chapter matters before implementation
+## 19.1 Why this topic exists (before how)
 
-Proxies and gateways become security control points where token validation, routing and transport policy can be enforced consistently. In interviews and production reviews, this topic is usually the boundary between configuration knowledge and architecture accountability: if the underlying rationale is weak, the resulting security model is brittle even when syntax is correct.
+Reverse proxies and API Gateways is a recurring source of production risk because teams often optimize for initial setup speed and under-specify lifecycle controls. Senior-level design requires explicit boundaries, failure assumptions and ownership contracts before configuration work starts.
 
-The design principle used in this book remains the same: define trust boundaries, failure modes and ownership first; only then choose Keycloak settings, adapters, proxies or automation patterns. The gateway should enforce TLS policy, header sanitation, token checks and safe forwarding defaults before traffic reaches applications.
+## 19.2 Core mechanisms and architecture decisions
 
-## 19.2 Core model and terminology
+* Proxy is trust boundary: TLS termination, header normalization, path routing.
+* Gateway often performs token validation and coarse authorization before service hop.
+* Forwarded headers must be strictly controlled to prevent spoofing.
+* mTLS between gateway and backend protects east-west identity context.
 
-The useful way to reason is to separate **control plane** from **runtime plane**. The control plane defines identities, credentials, policies and metadata ownership. The runtime plane carries protocol exchanges and enforcement decisions under latency and failure constraints. Many outages come from mixing the two and assuming runtime can fix control-plane ambiguity.
+## 19.3 Chapter schema
 
-For this chapter, keep three questions in scope: who is authoritative, what is cryptographically trusted, and where decisions are enforced. If one of these answers is implicit, incident response will be slower and audit evidence will be weaker.
-
-## 19.3 Keycloak implementation perspective
-
-Keycloak should be used as a deterministic trust service, not a collection of ad-hoc toggles. Start with a written contract (issuers, audiences, key material, lifecycle rules, mapper ownership), then encode it consistently in realms, clients, flows and automation.
-
-Operationally, introduce changes with rollback posture: canary realm/client changes, measurable acceptance criteria, and explicit compatibility windows for dependent applications. Security-sensitive defaults should be enforced centrally and reviewed through pull requests rather than direct console edits.
-
-## 19.4 Architecture schema
-
-Schema 19.1 — Control plane and runtime plane for chapter 19
+Schema 19.1 — Reverse proxies and API Gateways: control and runtime path
 
 ```mermaid
 flowchart TB
     subgraph CP[Control plane]
         direction TB
-        P[Policy and metadata]
-        I[Identity and credentials]
-        K[Key and trust material]
-        P --> I
-        I --> K
+        A[Reverse proxies and API Gateways]
+        B[Policy and configuration]
+        C[Identity and trust data]
+        A --> B
+        B --> C
     end
 
     subgraph RP[Runtime plane]
         direction TB
-        C[Client or subject]
-        KC[Keycloak trust service]
-        E[Enforcement point]
-        R[Protected resource]
-        C --> KC
-        KC --> E
-        E --> R
+        D[Client or workload]
+        E[Keycloak]
+        F[Gateway or relying party]
+        G[Protected service]
+        D --> E
+        E --> F
+        F --> G
     end
 
     CP --> RP
 ```
 
-## 19.5 Production notes
+## 19.4 Production notes
 
 **Common mistakes**
 
-* Deploying configuration before clarifying authoritative ownership of identities, claims or policies.
-* Accepting default protocol/library behavior without explicit validation requirements.
-* Treating this topic as a one-time setup instead of an operational lifecycle.
+* Trusting client-supplied forwarded headers.
+* Permissive CORS exposing tokens to wrong origins.
+* Proxy buffering config breaking large SAML/OIDC payloads.
 
 **Best practices**
 
-* Define trust, ownership and rollback criteria in writing before rollout.
-* Measure runtime behavior with explicit SLO-oriented signals tied to this chapter's control points.
-* Rehearse failure drills that include both technical and governance decisions.
+* Normalize and overwrite forwarded headers at edge.
+* Enforce strict upstream TLS and cert validation.
+* Implement explicit route-level auth policy.
 
 **Security implications**
 
-Misconfiguration in this area usually creates silent over-trust: tokens accepted in the wrong context, stale identity data, weak assurance reuse, or unverified delegation. These are high-impact because they often preserve application availability while degrading security invisibly.
+Header spoofing and misrouted auth bypass are common proxy-layer vulnerabilities.
 
 **Performance implications**
 
-Performance risk comes from hidden remote dependencies and repeated validation work. Cache strategy, timeout policy and token/session lifetimes must be tuned together; otherwise, peak load amplifies control-plane ambiguity into runtime saturation.
+JWT verification at gateway adds CPU cost but reduces backend duplication.
 
-## 19.6 Troubleshooting
+## 19.5 Troubleshooting
 
-If forwarded identity breaks, inspect `X-Forwarded-*` consistency and TLS termination boundaries. Build troubleshooting as a layered checklist: protocol correctness, cryptographic validation, policy evaluation, then infrastructure health. This ordering avoids premature scaling or unsafe hotfixes.
+* If backend sees wrong user identity, inspect header transform rules.
+* If intermittent 401 behind proxy, inspect clock drift and JWKS cache.
+* If redirects break, inspect `X-Forwarded-Proto/Host` consistency.
 
-## 19.7 Common misconceptions
+## 19.6 Common misconceptions
 
-* A reverse proxy is not just routing middleware; it is part of the security boundary.
-* "If it works in a demo, it is production-ready" — false; production requires resilience, observability and governance evidence.
-* "One successful login proves the design" — false; architecture quality is proven across lifecycle events, failure events and audit replay.
+* Gateway is only for routing.
+* TLS termination at edge means backend channel can be plain HTTP safely.
+* CORS is frontend-only concern.
 
-## 19.8 Interview questions
+## 19.7 Interview questions (graded)
 
 **Beginner**
 
-1. What business problem does this chapter's topic solve in IAM?
-2. Which component in Keycloak is most directly involved?
+- **Q:** What is the primary goal of "Reverse proxies and API Gateways" in a Keycloak platform?
+- **Expected answer:** Focus on enforce token, transport and routing policy at the edge.
 
 **Intermediate**
 
-3. Which trust boundary is easiest to misconfigure here, and why?
-4. What telemetry would you add to detect failure early?
+- **Q:** Which failure mode appears first when this area is misconfigured?
+- **Expected answer:** Usually one of: Trusting client-supplied forwarded headers.
 
 **Senior**
 
-5. How would you design this area for high assurance without breaking developer velocity?
-6. Which trade-offs would you document for auditors and platform owners?
+- **Q:** What design trade-off do you document before rollout for Reverse proxies and API Gateways?
+- **Expected answer:** Document boundary ownership, rollback plan, and security vs latency trade-offs.
 
 **Expert**
 
-7. Describe a failure mode that remains "green" on infrastructure dashboards but is security-critical.
-8. How would you prove remediation quality after a major incident linked to this domain?
+- **Q:** How do you prove this domain is production-ready under failure?
+- **Expected answer:** By rehearsal with measurable SLO/security outcomes and audited control evidence.
 
-## 19.9 Summary
+## 19.8 Summary
 
-* This chapter's domain is fundamentally about explicit trust and ownership, not only feature enablement.
-* Keycloak implementation quality depends on mapping control-plane clarity to runtime enforcement.
-* Security and performance outcomes are coupled; both must be designed and measured together.
-* Troubleshooting quality improves dramatically when protocol, policy and infrastructure checks are ordered deliberately.
+* Reverse proxies and API Gateways needs explicit control-plane decisions before runtime tuning.
+* Failure modes are predictable and should be tested deliberately.
+* Security and performance implications must be treated together.
+* Interview-grade answers should combine mechanism detail and operational trade-offs.
 
-## 19.10 References
+## 19.9 References
 
 * RFC 9110
 * RFC 7239
-* RFC 8705
 * OWASP ASVS
+* RFC 8705
 
 
 # Chapter 20 — Performance, tuning and capacity planning
 
 > **Objectives of this chapter**
-> By the end of it you will be able to: explain why this domain exists in enterprise IAM, use precise vocabulary when designing with Keycloak, map the topic to production controls, diagnose common failure patterns, and answer graded interview questions with architecture-level trade-off reasoning.
+> Predict and tune IAM throughput under burst and steady-state load.
 
-## 20.1 Why this chapter matters before implementation
+## 20.1 Why this topic exists (before how)
 
-Performance work in IAM is mainly about protecting authentication critical paths under burst traffic and avoiding expensive remote dependencies. In interviews and production reviews, this topic is usually the boundary between configuration knowledge and architecture accountability: if the underlying rationale is weak, the resulting security model is brittle even when syntax is correct.
+Performance, tuning and capacity planning is a recurring source of production risk because teams often optimize for initial setup speed and under-specify lifecycle controls. Senior-level design requires explicit boundaries, failure assumptions and ownership contracts before configuration work starts.
 
-The design principle used in this book remains the same: define trust boundaries, failure modes and ownership first; only then choose Keycloak settings, adapters, proxies or automation patterns. Capacity plans should start from login burst assumptions, token refresh amplification and federation round-trip costs.
+## 20.2 Core mechanisms and architecture decisions
 
-## 20.2 Core model and terminology
+* Capacity starts from peak login and refresh rates, not daily average.
+* Bottlenecks commonly lie in DB pool, cache misses, LDAP round-trips, and cryptographic operations.
+* Token/session TTL choices alter endpoint mix and load profile.
+* Performance engineering needs reproducible workload models.
 
-The useful way to reason is to separate **control plane** from **runtime plane**. The control plane defines identities, credentials, policies and metadata ownership. The runtime plane carries protocol exchanges and enforcement decisions under latency and failure constraints. Many outages come from mixing the two and assuming runtime can fix control-plane ambiguity.
+## 20.3 Chapter schema
 
-For this chapter, keep three questions in scope: who is authoritative, what is cryptographically trusted, and where decisions are enforced. If one of these answers is implicit, incident response will be slower and audit evidence will be weaker.
-
-## 20.3 Keycloak implementation perspective
-
-Keycloak should be used as a deterministic trust service, not a collection of ad-hoc toggles. Start with a written contract (issuers, audiences, key material, lifecycle rules, mapper ownership), then encode it consistently in realms, clients, flows and automation.
-
-Operationally, introduce changes with rollback posture: canary realm/client changes, measurable acceptance criteria, and explicit compatibility windows for dependent applications. Security-sensitive defaults should be enforced centrally and reviewed through pull requests rather than direct console edits.
-
-## 20.4 Architecture schema
-
-Schema 20.1 — Control plane and runtime plane for chapter 20
+Schema 20.1 — Performance, tuning and capacity planning: control and runtime path
 
 ```mermaid
 flowchart TB
     subgraph CP[Control plane]
         direction TB
-        P[Policy and metadata]
-        I[Identity and credentials]
-        K[Key and trust material]
-        P --> I
-        I --> K
+        A[Performance, tuning and capacity planning]
+        B[Policy and configuration]
+        C[Identity and trust data]
+        A --> B
+        B --> C
     end
 
     subgraph RP[Runtime plane]
         direction TB
-        C[Client or subject]
-        KC[Keycloak trust service]
-        E[Enforcement point]
-        R[Protected resource]
-        C --> KC
-        KC --> E
-        E --> R
+        D[Client or workload]
+        E[Keycloak]
+        F[Gateway or relying party]
+        G[Protected service]
+        D --> E
+        E --> F
+        F --> G
     end
 
     CP --> RP
 ```
 
-## 20.5 Production notes
+## 20.4 Production notes
 
 **Common mistakes**
 
-* Deploying configuration before clarifying authoritative ownership of identities, claims or policies.
-* Accepting default protocol/library behavior without explicit validation requirements.
-* Treating this topic as a one-time setup instead of an operational lifecycle.
+* Running load tests with unrealistic single-user loops.
+* Tuning JVM without measuring DB contention.
+* Ignoring client retry storms during partial outages.
 
 **Best practices**
 
-* Define trust, ownership and rollback criteria in writing before rollout.
-* Measure runtime behavior with explicit SLO-oriented signals tied to this chapter's control points.
-* Rehearse failure drills that include both technical and governance decisions.
+* Model multiple traffic classes: interactive login, refresh, token introspection, admin API.
+* Set SLOs and alert on saturation leading indicators.
+* Use backoff and rate-limits for abusive clients.
 
 **Security implications**
 
-Misconfiguration in this area usually creates silent over-trust: tokens accepted in the wrong context, stale identity data, weak assurance reuse, or unverified delegation. These are high-impact because they often preserve application availability while degrading security invisibly.
+Performance degradation can become security issue when teams disable validation checks under pressure—never trade core checks for throughput blindly.
 
 **Performance implications**
 
-Performance risk comes from hidden remote dependencies and repeated validation work. Cache strategy, timeout policy and token/session lifetimes must be tuned together; otherwise, peak load amplifies control-plane ambiguity into runtime saturation.
+CPU-heavy signature checks and DB I/O contention require different scaling levers.
 
-## 20.6 Troubleshooting
+## 20.5 Troubleshooting
 
-If throughput collapses at peaks, profile token endpoint, DB connection pool saturation and upstream LDAP response time. Build troubleshooting as a layered checklist: protocol correctness, cryptographic validation, policy evaluation, then infrastructure health. This ordering avoids premature scaling or unsafe hotfixes.
+* If p95 login spikes, split timings by external IdP/LDAP/DB.
+* If token endpoint saturates, inspect refresh churn and client behavior.
+* If throughput drops after scale-out, inspect cache affinity/network overhead.
 
-## 20.7 Common misconceptions
+## 20.6 Common misconceptions
 
-* Average throughput metrics can hide catastrophic peak failures during morning login storms.
-* "If it works in a demo, it is production-ready" — false; production requires resilience, observability and governance evidence.
-* "One successful login proves the design" — false; architecture quality is proven across lifecycle events, failure events and audit replay.
+* Autoscaling alone solves IAM performance.
+* Shorter token TTL is always safer with no cost.
+* Only Keycloak metrics matter for tuning.
 
-## 20.8 Interview questions
+## 20.7 Interview questions (graded)
 
 **Beginner**
 
-1. What business problem does this chapter's topic solve in IAM?
-2. Which component in Keycloak is most directly involved?
+- **Q:** What is the primary goal of "Performance, tuning and capacity planning" in a Keycloak platform?
+- **Expected answer:** Focus on predict and tune iam throughput under burst and steady-state load.
 
 **Intermediate**
 
-3. Which trust boundary is easiest to misconfigure here, and why?
-4. What telemetry would you add to detect failure early?
+- **Q:** Which failure mode appears first when this area is misconfigured?
+- **Expected answer:** Usually one of: Running load tests with unrealistic single-user loops.
 
 **Senior**
 
-5. How would you design this area for high assurance without breaking developer velocity?
-6. Which trade-offs would you document for auditors and platform owners?
+- **Q:** What design trade-off do you document before rollout for Performance, tuning and capacity planning?
+- **Expected answer:** Document boundary ownership, rollback plan, and security vs latency trade-offs.
 
 **Expert**
 
-7. Describe a failure mode that remains "green" on infrastructure dashboards but is security-critical.
-8. How would you prove remediation quality after a major incident linked to this domain?
+- **Q:** How do you prove this domain is production-ready under failure?
+- **Expected answer:** By rehearsal with measurable SLO/security outcomes and audited control evidence.
 
-## 20.9 Summary
+## 20.8 Summary
 
-* This chapter's domain is fundamentally about explicit trust and ownership, not only feature enablement.
-* Keycloak implementation quality depends on mapping control-plane clarity to runtime enforcement.
-* Security and performance outcomes are coupled; both must be designed and measured together.
-* Troubleshooting quality improves dramatically when protocol, policy and infrastructure checks are ordered deliberately.
+* Performance, tuning and capacity planning needs explicit control-plane decisions before runtime tuning.
+* Failure modes are predictable and should be tested deliberately.
+* Security and performance implications must be treated together.
+* Interview-grade answers should combine mechanism detail and operational trade-offs.
 
-## 20.10 References
+## 20.9 References
 
-* Little's Law
 * SRE Workbook
-* JVM tuning docs
 * PostgreSQL performance docs
+* JVM tuning docs
+* Little's Law
 
 
 # Chapter 21 — Observability, auditing and SIEM integration
 
 > **Objectives of this chapter**
-> By the end of it you will be able to: explain why this domain exists in enterprise IAM, use precise vocabulary when designing with Keycloak, map the topic to production controls, diagnose common failure patterns, and answer graded interview questions with architecture-level trade-off reasoning.
+> Build forensic-grade visibility across auth and admin events.
 
-## 21.1 Why this chapter matters before implementation
+## 21.1 Why this topic exists (before how)
 
-Without observability, identity platforms are blind during incidents and audits; logs and metrics are security controls, not optional telemetry. In interviews and production reviews, this topic is usually the boundary between configuration knowledge and architecture accountability: if the underlying rationale is weak, the resulting security model is brittle even when syntax is correct.
+Observability, auditing and SIEM integration is a recurring source of production risk because teams often optimize for initial setup speed and under-specify lifecycle controls. Senior-level design requires explicit boundaries, failure assumptions and ownership contracts before configuration work starts.
 
-The design principle used in this book remains the same: define trust boundaries, failure modes and ownership first; only then choose Keycloak settings, adapters, proxies or automation patterns. Observability must include authn/authz event lineage from user action to gateway decision to API response for forensic completeness.
+## 21.2 Core mechanisms and architecture decisions
 
-## 21.2 Core model and terminology
+* Identity observability must connect user action to policy decision and backend result.
+* Admin events and auth events need retention and tamper-evident transport.
+* SIEM correlation rules should detect brute force, impossible travel, token abuse, and admin anomalies.
+* Metrics, logs, and traces each serve different incident questions.
 
-The useful way to reason is to separate **control plane** from **runtime plane**. The control plane defines identities, credentials, policies and metadata ownership. The runtime plane carries protocol exchanges and enforcement decisions under latency and failure constraints. Many outages come from mixing the two and assuming runtime can fix control-plane ambiguity.
+## 21.3 Chapter schema
 
-For this chapter, keep three questions in scope: who is authoritative, what is cryptographically trusted, and where decisions are enforced. If one of these answers is implicit, incident response will be slower and audit evidence will be weaker.
-
-## 21.3 Keycloak implementation perspective
-
-Keycloak should be used as a deterministic trust service, not a collection of ad-hoc toggles. Start with a written contract (issuers, audiences, key material, lifecycle rules, mapper ownership), then encode it consistently in realms, clients, flows and automation.
-
-Operationally, introduce changes with rollback posture: canary realm/client changes, measurable acceptance criteria, and explicit compatibility windows for dependent applications. Security-sensitive defaults should be enforced centrally and reviewed through pull requests rather than direct console edits.
-
-## 21.4 Architecture schema
-
-Schema 21.1 — Control plane and runtime plane for chapter 21
+Schema 21.1 — Observability, auditing and SIEM integration: control and runtime path
 
 ```mermaid
 flowchart TB
     subgraph CP[Control plane]
         direction TB
-        P[Policy and metadata]
-        I[Identity and credentials]
-        K[Key and trust material]
-        P --> I
-        I --> K
+        A[Observability, auditing and SIEM integration]
+        B[Policy and configuration]
+        C[Identity and trust data]
+        A --> B
+        B --> C
     end
 
     subgraph RP[Runtime plane]
         direction TB
-        C[Client or subject]
-        KC[Keycloak trust service]
-        E[Enforcement point]
-        R[Protected resource]
-        C --> KC
-        KC --> E
-        E --> R
+        D[Client or workload]
+        E[Keycloak]
+        F[Gateway or relying party]
+        G[Protected service]
+        D --> E
+        E --> F
+        F --> G
     end
 
     CP --> RP
 ```
 
-## 21.5 Production notes
+## 21.4 Production notes
 
 **Common mistakes**
 
-* Deploying configuration before clarifying authoritative ownership of identities, claims or policies.
-* Accepting default protocol/library behavior without explicit validation requirements.
-* Treating this topic as a one-time setup instead of an operational lifecycle.
+* Collecting logs without normalized fields.
+* Dropping failed auth details due to volume.
+* No separation between audit retention and debug retention.
 
 **Best practices**
 
-* Define trust, ownership and rollback criteria in writing before rollout.
-* Measure runtime behavior with explicit SLO-oriented signals tied to this chapter's control points.
-* Rehearse failure drills that include both technical and governance decisions.
+* Define canonical event schema and correlation IDs.
+* Ship security-relevant events near real time.
+* Test SIEM detection rules with attack simulations.
 
 **Security implications**
 
-Misconfiguration in this area usually creates silent over-trust: tokens accepted in the wrong context, stale identity data, weak assurance reuse, or unverified delegation. These are high-impact because they often preserve application availability while degrading security invisibly.
+Audit log integrity is compliance-critical; protect pipeline against truncation and unauthorized edits.
 
 **Performance implications**
 
-Performance risk comes from hidden remote dependencies and repeated validation work. Cache strategy, timeout policy and token/session lifetimes must be tuned together; otherwise, peak load amplifies control-plane ambiguity into runtime saturation.
+Overly verbose logging can hurt throughput and storage; sample non-critical debug paths.
 
-## 21.6 Troubleshooting
+## 21.5 Troubleshooting
 
-When alerts are noisy, refine identity-event parsing with high-signal conditions tied to attack playbooks. Build troubleshooting as a layered checklist: protocol correctness, cryptographic validation, policy evaluation, then infrastructure health. This ordering avoids premature scaling or unsafe hotfixes.
+* If SIEM misses brute-force event, inspect parser and field mapping.
+* If event lag increases, inspect queue backpressure.
+* If investigators cannot reconstruct timeline, enforce request ID propagation.
 
-## 21.7 Common misconceptions
+## 21.6 Common misconceptions
 
-* Collecting logs is not observability; correlation and actionable alerts are required.
-* "If it works in a demo, it is production-ready" — false; production requires resilience, observability and governance evidence.
-* "One successful login proves the design" — false; architecture quality is proven across lifecycle events, failure events and audit replay.
+* Metrics can replace audit logs.
+* If no alerts fired, no security issue happened.
+* Retention policy is purely storage decision.
 
-## 21.8 Interview questions
+## 21.7 Interview questions (graded)
 
 **Beginner**
 
-1. What business problem does this chapter's topic solve in IAM?
-2. Which component in Keycloak is most directly involved?
+- **Q:** What is the primary goal of "Observability, auditing and SIEM integration" in a Keycloak platform?
+- **Expected answer:** Focus on build forensic-grade visibility across auth and admin events.
 
 **Intermediate**
 
-3. Which trust boundary is easiest to misconfigure here, and why?
-4. What telemetry would you add to detect failure early?
+- **Q:** Which failure mode appears first when this area is misconfigured?
+- **Expected answer:** Usually one of: Collecting logs without normalized fields.
 
 **Senior**
 
-5. How would you design this area for high assurance without breaking developer velocity?
-6. Which trade-offs would you document for auditors and platform owners?
+- **Q:** What design trade-off do you document before rollout for Observability, auditing and SIEM integration?
+- **Expected answer:** Document boundary ownership, rollback plan, and security vs latency trade-offs.
 
 **Expert**
 
-7. Describe a failure mode that remains "green" on infrastructure dashboards but is security-critical.
-8. How would you prove remediation quality after a major incident linked to this domain?
+- **Q:** How do you prove this domain is production-ready under failure?
+- **Expected answer:** By rehearsal with measurable SLO/security outcomes and audited control evidence.
 
-## 21.9 Summary
+## 21.8 Summary
 
-* This chapter's domain is fundamentally about explicit trust and ownership, not only feature enablement.
-* Keycloak implementation quality depends on mapping control-plane clarity to runtime enforcement.
-* Security and performance outcomes are coupled; both must be designed and measured together.
-* Troubleshooting quality improves dramatically when protocol, policy and infrastructure checks are ordered deliberately.
+* Observability, auditing and SIEM integration needs explicit control-plane decisions before runtime tuning.
+* Failure modes are predictable and should be tested deliberately.
+* Security and performance implications must be treated together.
+* Interview-grade answers should combine mechanism detail and operational trade-offs.
 
-## 21.10 References
+## 21.9 References
 
 * OpenTelemetry spec
 * RFC 5424
@@ -3102,480 +3003,460 @@ When alerts are noisy, refine identity-event parsing with high-signal conditions
 # Chapter 22 — Upgrades, backup and disaster recovery
 
 > **Objectives of this chapter**
-> By the end of it you will be able to: explain why this domain exists in enterprise IAM, use precise vocabulary when designing with Keycloak, map the topic to production controls, diagnose common failure patterns, and answer graded interview questions with architecture-level trade-off reasoning.
+> Upgrade and recover without breaking trust continuity.
 
-## 22.1 Why this chapter matters before implementation
+## 22.1 Why this topic exists (before how)
 
-Identity upgrades and recovery require cryptographic and session continuity planning; reckless changes can invalidate active trust relationships. In interviews and production reviews, this topic is usually the boundary between configuration knowledge and architecture accountability: if the underlying rationale is weak, the resulting security model is brittle even when syntax is correct.
+Upgrades, backup and disaster recovery is a recurring source of production risk because teams often optimize for initial setup speed and under-specify lifecycle controls. Senior-level design requires explicit boundaries, failure assumptions and ownership contracts before configuration work starts.
 
-The design principle used in this book remains the same: define trust boundaries, failure modes and ownership first; only then choose Keycloak settings, adapters, proxies or automation patterns. Upgrade and DR runbooks should be rehearsed with production-like traffic and include signing key continuity tests.
+## 22.2 Core mechanisms and architecture decisions
 
-## 22.2 Core model and terminology
+* Upgrades change binaries, schema, configs, and trust artifacts simultaneously.
+* Backup strategy must include DB, realm config, keys, and integration metadata.
+* DR is proven only by restore and replay drills.
+* Version compatibility windows influence rollback feasibility.
 
-The useful way to reason is to separate **control plane** from **runtime plane**. The control plane defines identities, credentials, policies and metadata ownership. The runtime plane carries protocol exchanges and enforcement decisions under latency and failure constraints. Many outages come from mixing the two and assuming runtime can fix control-plane ambiguity.
+## 22.3 Chapter schema
 
-For this chapter, keep three questions in scope: who is authoritative, what is cryptographically trusted, and where decisions are enforced. If one of these answers is implicit, incident response will be slower and audit evidence will be weaker.
-
-## 22.3 Keycloak implementation perspective
-
-Keycloak should be used as a deterministic trust service, not a collection of ad-hoc toggles. Start with a written contract (issuers, audiences, key material, lifecycle rules, mapper ownership), then encode it consistently in realms, clients, flows and automation.
-
-Operationally, introduce changes with rollback posture: canary realm/client changes, measurable acceptance criteria, and explicit compatibility windows for dependent applications. Security-sensitive defaults should be enforced centrally and reviewed through pull requests rather than direct console edits.
-
-## 22.4 Architecture schema
-
-Schema 22.1 — Control plane and runtime plane for chapter 22
+Schema 22.1 — Upgrades, backup and disaster recovery: control and runtime path
 
 ```mermaid
 flowchart TB
     subgraph CP[Control plane]
         direction TB
-        P[Policy and metadata]
-        I[Identity and credentials]
-        K[Key and trust material]
-        P --> I
-        I --> K
+        A[Upgrades, backup and disaster recovery]
+        B[Policy and configuration]
+        C[Identity and trust data]
+        A --> B
+        B --> C
     end
 
     subgraph RP[Runtime plane]
         direction TB
-        C[Client or subject]
-        KC[Keycloak trust service]
-        E[Enforcement point]
-        R[Protected resource]
-        C --> KC
-        KC --> E
-        E --> R
+        D[Client or workload]
+        E[Keycloak]
+        F[Gateway or relying party]
+        G[Protected service]
+        D --> E
+        E --> F
+        F --> G
     end
 
     CP --> RP
 ```
 
-## 22.5 Production notes
+## 22.4 Production notes
 
 **Common mistakes**
 
-* Deploying configuration before clarifying authoritative ownership of identities, claims or policies.
-* Accepting default protocol/library behavior without explicit validation requirements.
-* Treating this topic as a one-time setup instead of an operational lifecycle.
+* Upgrading directly across unsupported version jumps.
+* Backing up DB but not externalized keys/certs.
+* No rehearsal for rollback after schema migration.
 
 **Best practices**
 
-* Define trust, ownership and rollback criteria in writing before rollout.
-* Measure runtime behavior with explicit SLO-oriented signals tied to this chapter's control points.
-* Rehearse failure drills that include both technical and governance decisions.
+* Use staged upgrade environments with production-like traffic.
+* Version-control realm exports and migration notes.
+* Define DR runbooks with role assignments and timing targets.
 
 **Security implications**
 
-Misconfiguration in this area usually creates silent over-trust: tokens accepted in the wrong context, stale identity data, weak assurance reuse, or unverified delegation. These are high-impact because they often preserve application availability while degrading security invisibly.
+Backup archives may contain sensitive identity data and keys; encrypt and control access strictly.
 
 **Performance implications**
 
-Performance risk comes from hidden remote dependencies and repeated validation work. Cache strategy, timeout policy and token/session lifetimes must be tuned together; otherwise, peak load amplifies control-plane ambiguity into runtime saturation.
+Restore validation adds controlled overhead but prevents false confidence.
 
-## 22.6 Troubleshooting
+## 22.5 Troubleshooting
 
-If rollback fails, verify schema compatibility and realm-export version handling before reattempting restore. Build troubleshooting as a layered checklist: protocol correctness, cryptographic validation, policy evaluation, then infrastructure health. This ordering avoids premature scaling or unsafe hotfixes.
+* If post-upgrade logins fail, inspect provider/API compatibility and schema migration logs.
+* If restore succeeds but SSO breaks, inspect client secrets/redirect metadata drift.
+* If rollback impossible, inspect irreversible migration steps done prematurely.
 
-## 22.7 Common misconceptions
+## 22.6 Common misconceptions
 
-* Backup success logs do not prove recoverability; restore drills do.
-* "If it works in a demo, it is production-ready" — false; production requires resilience, observability and governance evidence.
-* "One successful login proves the design" — false; architecture quality is proven across lifecycle events, failure events and audit replay.
+* A successful backup job equals recoverability.
+* Minor version upgrades are risk-free for IAM.
+* DR planning can wait until after go-live.
 
-## 22.8 Interview questions
+## 22.7 Interview questions (graded)
 
 **Beginner**
 
-1. What business problem does this chapter's topic solve in IAM?
-2. Which component in Keycloak is most directly involved?
+- **Q:** What is the primary goal of "Upgrades, backup and disaster recovery" in a Keycloak platform?
+- **Expected answer:** Focus on upgrade and recover without breaking trust continuity.
 
 **Intermediate**
 
-3. Which trust boundary is easiest to misconfigure here, and why?
-4. What telemetry would you add to detect failure early?
+- **Q:** Which failure mode appears first when this area is misconfigured?
+- **Expected answer:** Usually one of: Upgrading directly across unsupported version jumps.
 
 **Senior**
 
-5. How would you design this area for high assurance without breaking developer velocity?
-6. Which trade-offs would you document for auditors and platform owners?
+- **Q:** What design trade-off do you document before rollout for Upgrades, backup and disaster recovery?
+- **Expected answer:** Document boundary ownership, rollback plan, and security vs latency trade-offs.
 
 **Expert**
 
-7. Describe a failure mode that remains "green" on infrastructure dashboards but is security-critical.
-8. How would you prove remediation quality after a major incident linked to this domain?
+- **Q:** How do you prove this domain is production-ready under failure?
+- **Expected answer:** By rehearsal with measurable SLO/security outcomes and audited control evidence.
 
-## 22.9 Summary
+## 22.8 Summary
 
-* This chapter's domain is fundamentally about explicit trust and ownership, not only feature enablement.
-* Keycloak implementation quality depends on mapping control-plane clarity to runtime enforcement.
-* Security and performance outcomes are coupled; both must be designed and measured together.
-* Troubleshooting quality improves dramatically when protocol, policy and infrastructure checks are ordered deliberately.
+* Upgrades, backup and disaster recovery needs explicit control-plane decisions before runtime tuning.
+* Failure modes are predictable and should be tested deliberately.
+* Security and performance implications must be treated together.
+* Interview-grade answers should combine mechanism detail and operational trade-offs.
 
-## 22.10 References
+## 22.9 References
 
-* Semantic Versioning
+* Keycloak upgrade guide
 * NIST SP 800-34
 * PostgreSQL backup docs
-* Keycloak upgrade guide
+* Semantic Versioning
 
 
 # Chapter 23 — Extending Keycloak: SPIs, custom providers, themes
 
 > **Objectives of this chapter**
-> By the end of it you will be able to: explain why this domain exists in enterprise IAM, use precise vocabulary when designing with Keycloak, map the topic to production controls, diagnose common failure patterns, and answer graded interview questions with architecture-level trade-off reasoning.
+> Customize safely while preserving upgradeability.
 
-## 23.1 Why this chapter matters before implementation
+## 23.1 Why this topic exists (before how)
 
-Customization is often unavoidable, but extension boundaries must protect upgradeability and isolate business logic from core security paths. In interviews and production reviews, this topic is usually the boundary between configuration knowledge and architecture accountability: if the underlying rationale is weak, the resulting security model is brittle even when syntax is correct.
+Extending Keycloak: SPIs, custom providers, themes is a recurring source of production risk because teams often optimize for initial setup speed and under-specify lifecycle controls. Senior-level design requires explicit boundaries, failure assumptions and ownership contracts before configuration work starts.
 
-The design principle used in this book remains the same: define trust boundaries, failure modes and ownership first; only then choose Keycloak settings, adapters, proxies or automation patterns. Custom code should stay narrow, versioned and testable, with clear rollback paths for provider and theme updates.
+## 23.2 Core mechanisms and architecture decisions
 
-## 23.2 Core model and terminology
+* SPIs allow extension at authentication, user storage, events, and protocol mappers.
+* Theme customization impacts UX and security signaling (trusted origin cues).
+* Custom providers must track Keycloak API evolution across upgrades.
+* Extension boundaries should minimize coupling to internal classes.
 
-The useful way to reason is to separate **control plane** from **runtime plane**. The control plane defines identities, credentials, policies and metadata ownership. The runtime plane carries protocol exchanges and enforcement decisions under latency and failure constraints. Many outages come from mixing the two and assuming runtime can fix control-plane ambiguity.
+## 23.3 Chapter schema
 
-For this chapter, keep three questions in scope: who is authoritative, what is cryptographically trusted, and where decisions are enforced. If one of these answers is implicit, incident response will be slower and audit evidence will be weaker.
-
-## 23.3 Keycloak implementation perspective
-
-Keycloak should be used as a deterministic trust service, not a collection of ad-hoc toggles. Start with a written contract (issuers, audiences, key material, lifecycle rules, mapper ownership), then encode it consistently in realms, clients, flows and automation.
-
-Operationally, introduce changes with rollback posture: canary realm/client changes, measurable acceptance criteria, and explicit compatibility windows for dependent applications. Security-sensitive defaults should be enforced centrally and reviewed through pull requests rather than direct console edits.
-
-## 23.4 Architecture schema
-
-Schema 23.1 — Control plane and runtime plane for chapter 23
+Schema 23.1 — Extending Keycloak: SPIs, custom providers, themes: control and runtime path
 
 ```mermaid
 flowchart TB
     subgraph CP[Control plane]
         direction TB
-        P[Policy and metadata]
-        I[Identity and credentials]
-        K[Key and trust material]
-        P --> I
-        I --> K
+        A[Extending Keycloak: SPIs, custom providers, themes]
+        B[Policy and configuration]
+        C[Identity and trust data]
+        A --> B
+        B --> C
     end
 
     subgraph RP[Runtime plane]
         direction TB
-        C[Client or subject]
-        KC[Keycloak trust service]
-        E[Enforcement point]
-        R[Protected resource]
-        C --> KC
-        KC --> E
-        E --> R
+        D[Client or workload]
+        E[Keycloak]
+        F[Gateway or relying party]
+        G[Protected service]
+        D --> E
+        E --> F
+        F --> G
     end
 
     CP --> RP
 ```
 
-## 23.5 Production notes
+## 23.4 Production notes
 
 **Common mistakes**
 
-* Deploying configuration before clarifying authoritative ownership of identities, claims or policies.
-* Accepting default protocol/library behavior without explicit validation requirements.
-* Treating this topic as a one-time setup instead of an operational lifecycle.
+* Embedding business-critical remote calls in authenticator without timeout control.
+* Copy-pasting old SPI examples across major versions.
+* Theme customizations that hide security warnings or consent context.
 
 **Best practices**
 
-* Define trust, ownership and rollback criteria in writing before rollout.
-* Measure runtime behavior with explicit SLO-oriented signals tied to this chapter's control points.
-* Rehearse failure drills that include both technical and governance decisions.
+* Keep custom provider surface minimal and well-tested.
+* Use contract tests per Keycloak version upgrade.
+* Treat themes as security-sensitive UI artifacts.
 
 **Security implications**
 
-Misconfiguration in this area usually creates silent over-trust: tokens accepted in the wrong context, stale identity data, weak assurance reuse, or unverified delegation. These are high-impact because they often preserve application availability while degrading security invisibly.
+Custom code runs in IdP trust boundary; supply-chain and code-review rigor must match core platform controls.
 
 **Performance implications**
 
-Performance risk comes from hidden remote dependencies and repeated validation work. Cache strategy, timeout policy and token/session lifetimes must be tuned together; otherwise, peak load amplifies control-plane ambiguity into runtime saturation.
+Poorly optimized providers can dominate auth latency more than base Keycloak.
 
-## 23.6 Troubleshooting
+## 23.5 Troubleshooting
 
-If custom providers fail after upgrade, check SPI version changes and classloading assumptions. Build troubleshooting as a layered checklist: protocol correctness, cryptographic validation, policy evaluation, then infrastructure health. This ordering avoids premature scaling or unsafe hotfixes.
+* If provider not loaded, inspect module packaging and SPI registration files.
+* If login errors after upgrade, inspect binary/API compatibility matrix.
+* If UI regressions affect consent/login, compare theme templates against upstream changes.
 
-## 23.7 Common misconceptions
+## 23.6 Common misconceptions
 
-* SPI customization is not free flexibility; it creates long-term maintenance obligations.
-* "If it works in a demo, it is production-ready" — false; production requires resilience, observability and governance evidence.
-* "One successful login proves the design" — false; architecture quality is proven across lifecycle events, failure events and audit replay.
+* SPIs are plug-and-play with low maintenance cost.
+* Themes are cosmetic only.
+* Custom code can skip security review because it is internal.
 
-## 23.8 Interview questions
+## 23.7 Interview questions (graded)
 
 **Beginner**
 
-1. What business problem does this chapter's topic solve in IAM?
-2. Which component in Keycloak is most directly involved?
+- **Q:** What is the primary goal of "Extending Keycloak: SPIs, custom providers, themes" in a Keycloak platform?
+- **Expected answer:** Focus on customize safely while preserving upgradeability.
 
 **Intermediate**
 
-3. Which trust boundary is easiest to misconfigure here, and why?
-4. What telemetry would you add to detect failure early?
+- **Q:** Which failure mode appears first when this area is misconfigured?
+- **Expected answer:** Usually one of: Embedding business-critical remote calls in authenticator without timeout control.
 
 **Senior**
 
-5. How would you design this area for high assurance without breaking developer velocity?
-6. Which trade-offs would you document for auditors and platform owners?
+- **Q:** What design trade-off do you document before rollout for Extending Keycloak: SPIs, custom providers, themes?
+- **Expected answer:** Document boundary ownership, rollback plan, and security vs latency trade-offs.
 
 **Expert**
 
-7. Describe a failure mode that remains "green" on infrastructure dashboards but is security-critical.
-8. How would you prove remediation quality after a major incident linked to this domain?
+- **Q:** How do you prove this domain is production-ready under failure?
+- **Expected answer:** By rehearsal with measurable SLO/security outcomes and audited control evidence.
 
-## 23.9 Summary
+## 23.8 Summary
 
-* This chapter's domain is fundamentally about explicit trust and ownership, not only feature enablement.
-* Keycloak implementation quality depends on mapping control-plane clarity to runtime enforcement.
-* Security and performance outcomes are coupled; both must be designed and measured together.
-* Troubleshooting quality improves dramatically when protocol, policy and infrastructure checks are ordered deliberately.
+* Extending Keycloak: SPIs, custom providers, themes needs explicit control-plane decisions before runtime tuning.
+* Failure modes are predictable and should be tested deliberately.
+* Security and performance implications must be treated together.
+* Interview-grade answers should combine mechanism detail and operational trade-offs.
 
-## 23.10 References
+## 23.9 References
 
 * Keycloak SPI docs
 * Quarkus extension model
-* Jakarta EE SPI patterns
 * OWASP ASVS
+* Jakarta EE patterns
 
 
 # Chapter 24 — Configuration as code: Admin CLI, Terraform, Ansible, Operator
 
 > **Objectives of this chapter**
-> By the end of it you will be able to: explain why this domain exists in enterprise IAM, use precise vocabulary when designing with Keycloak, map the topic to production controls, diagnose common failure patterns, and answer graded interview questions with architecture-level trade-off reasoning.
+> Manage Keycloak state declaratively with drift control.
 
-## 24.1 Why this chapter matters before implementation
+## 24.1 Why this topic exists (before how)
 
-Manual administration does not scale and cannot be reviewed; configuration-as-code provides repeatability, drift control and change auditability. In interviews and production reviews, this topic is usually the boundary between configuration knowledge and architecture accountability: if the underlying rationale is weak, the resulting security model is brittle even when syntax is correct.
+Configuration as code: Admin CLI, Terraform, Ansible, Operator is a recurring source of production risk because teams often optimize for initial setup speed and under-specify lifecycle controls. Senior-level design requires explicit boundaries, failure assumptions and ownership contracts before configuration work starts.
 
-The design principle used in this book remains the same: define trust boundaries, failure modes and ownership first; only then choose Keycloak settings, adapters, proxies or automation patterns. Treat realm state as declarative artifacts and enforce pull-request review for every security-significant change.
+## 24.2 Core mechanisms and architecture decisions
 
-## 24.2 Core model and terminology
+* Config-as-code enables repeatability, reviewability, and drift control.
+* Different tools fit layers: `kcadm` for imperative tasks, Terraform for desired state, Operator for Kubernetes-native lifecycle.
+* Idempotency and import-order rules decide reliability.
+* State reconciliation must account for manual console edits.
 
-The useful way to reason is to separate **control plane** from **runtime plane**. The control plane defines identities, credentials, policies and metadata ownership. The runtime plane carries protocol exchanges and enforcement decisions under latency and failure constraints. Many outages come from mixing the two and assuming runtime can fix control-plane ambiguity.
+## 24.3 Chapter schema
 
-For this chapter, keep three questions in scope: who is authoritative, what is cryptographically trusted, and where decisions are enforced. If one of these answers is implicit, incident response will be slower and audit evidence will be weaker.
-
-## 24.3 Keycloak implementation perspective
-
-Keycloak should be used as a deterministic trust service, not a collection of ad-hoc toggles. Start with a written contract (issuers, audiences, key material, lifecycle rules, mapper ownership), then encode it consistently in realms, clients, flows and automation.
-
-Operationally, introduce changes with rollback posture: canary realm/client changes, measurable acceptance criteria, and explicit compatibility windows for dependent applications. Security-sensitive defaults should be enforced centrally and reviewed through pull requests rather than direct console edits.
-
-## 24.4 Architecture schema
-
-Schema 24.1 — Control plane and runtime plane for chapter 24
+Schema 24.1 — Configuration as code: Admin CLI, Terraform, Ansible, Operator: control and runtime path
 
 ```mermaid
 flowchart TB
     subgraph CP[Control plane]
         direction TB
-        P[Policy and metadata]
-        I[Identity and credentials]
-        K[Key and trust material]
-        P --> I
-        I --> K
+        A[Configuration as code: Admin CLI, Terraform, Ansible, Operator]
+        B[Policy and configuration]
+        C[Identity and trust data]
+        A --> B
+        B --> C
     end
 
     subgraph RP[Runtime plane]
         direction TB
-        C[Client or subject]
-        KC[Keycloak trust service]
-        E[Enforcement point]
-        R[Protected resource]
-        C --> KC
-        KC --> E
-        E --> R
+        D[Client or workload]
+        E[Keycloak]
+        F[Gateway or relying party]
+        G[Protected service]
+        D --> E
+        E --> F
+        F --> G
     end
 
     CP --> RP
 ```
 
-## 24.5 Production notes
+## 24.4 Production notes
 
 **Common mistakes**
 
-* Deploying configuration before clarifying authoritative ownership of identities, claims or policies.
-* Accepting default protocol/library behavior without explicit validation requirements.
-* Treating this topic as a one-time setup instead of an operational lifecycle.
+* Applying Terraform against unmanaged hand-edited realms.
+* Storing admin credentials in plaintext pipelines.
+* No promotion pipeline between environments.
 
 **Best practices**
 
-* Define trust, ownership and rollback criteria in writing before rollout.
-* Measure runtime behavior with explicit SLO-oriented signals tied to this chapter's control points.
-* Rehearse failure drills that include both technical and governance decisions.
+* Use secrets manager for automation identities.
+* Define environment overlays with explicit differences.
+* Detect drift via periodic export/diff checks.
 
 **Security implications**
 
-Misconfiguration in this area usually creates silent over-trust: tokens accepted in the wrong context, stale identity data, weak assurance reuse, or unverified delegation. These are high-impact because they often preserve application availability while degrading security invisibly.
+Automation credentials are high-impact secrets; enforce short-lived tokens and least privilege.
 
 **Performance implications**
 
-Performance risk comes from hidden remote dependencies and repeated validation work. Cache strategy, timeout policy and token/session lifetimes must be tuned together; otherwise, peak load amplifies control-plane ambiguity into runtime saturation.
+Large declarative applies can stress admin API and DB; batch changes safely.
 
-## 24.6 Troubleshooting
+## 24.5 Troubleshooting
 
-When declarative apply drifts, compare live realm export with source-of-truth and inspect out-of-band admin actions. Build troubleshooting as a layered checklist: protocol correctness, cryptographic validation, policy evaluation, then infrastructure health. This ordering avoids premature scaling or unsafe hotfixes.
+* If plan/apply oscillates, inspect provider computed fields and ignored attributes.
+* If operator reconciles unexpectedly, inspect custom resource ownership boundaries.
+* If pipeline fails intermittently, inspect API rate limits and retry policy.
 
-## 24.7 Common misconceptions
+## 24.6 Common misconceptions
 
-* Infrastructure-as-code does not prevent drift unless reconciliation and policy gates are enforced.
-* "If it works in a demo, it is production-ready" — false; production requires resilience, observability and governance evidence.
-* "One successful login proves the design" — false; architecture quality is proven across lifecycle events, failure events and audit replay.
+* Automation removes need for governance.
+* Any CLI script is config-as-code.
+* Declarative tools guarantee safe changes automatically.
 
-## 24.8 Interview questions
+## 24.7 Interview questions (graded)
 
 **Beginner**
 
-1. What business problem does this chapter's topic solve in IAM?
-2. Which component in Keycloak is most directly involved?
+- **Q:** What is the primary goal of "Configuration as code: Admin CLI, Terraform, Ansible, Operator" in a Keycloak platform?
+- **Expected answer:** Focus on manage keycloak state declaratively with drift control.
 
 **Intermediate**
 
-3. Which trust boundary is easiest to misconfigure here, and why?
-4. What telemetry would you add to detect failure early?
+- **Q:** Which failure mode appears first when this area is misconfigured?
+- **Expected answer:** Usually one of: Applying Terraform against unmanaged hand-edited realms.
 
 **Senior**
 
-5. How would you design this area for high assurance without breaking developer velocity?
-6. Which trade-offs would you document for auditors and platform owners?
+- **Q:** What design trade-off do you document before rollout for Configuration as code: Admin CLI, Terraform, Ansible, Operator?
+- **Expected answer:** Document boundary ownership, rollback plan, and security vs latency trade-offs.
 
 **Expert**
 
-7. Describe a failure mode that remains "green" on infrastructure dashboards but is security-critical.
-8. How would you prove remediation quality after a major incident linked to this domain?
+- **Q:** How do you prove this domain is production-ready under failure?
+- **Expected answer:** By rehearsal with measurable SLO/security outcomes and audited control evidence.
 
-## 24.9 Summary
+## 24.8 Summary
 
-* This chapter's domain is fundamentally about explicit trust and ownership, not only feature enablement.
-* Keycloak implementation quality depends on mapping control-plane clarity to runtime enforcement.
-* Security and performance outcomes are coupled; both must be designed and measured together.
-* Troubleshooting quality improves dramatically when protocol, policy and infrastructure checks are ordered deliberately.
+* Configuration as code: Admin CLI, Terraform, Ansible, Operator needs explicit control-plane decisions before runtime tuning.
+* Failure modes are predictable and should be tested deliberately.
+* Security and performance implications must be treated together.
+* Interview-grade answers should combine mechanism detail and operational trade-offs.
 
-## 24.10 References
+## 24.9 References
 
-* Terraform provider docs
-* Ansible idempotency guidelines
-* GitOps principles
+* Terraform docs
+* Ansible idempotency docs
 * Operator pattern
+* GitOps principles
 
 
 # Chapter 25 — Migrating from a legacy IdP
 
 > **Objectives of this chapter**
-> By the end of it you will be able to: explain why this domain exists in enterprise IAM, use precise vocabulary when designing with Keycloak, map the topic to production controls, diagnose common failure patterns, and answer graded interview questions with architecture-level trade-off reasoning.
+> Plan phased migration with protocol and entitlement parity.
 
-## 25.1 Why this chapter matters before implementation
+## 25.1 Why this topic exists (before how)
 
-Migration projects fail when teams move screens before semantics; protocol, assurance and entitlement parity must be mapped first. In interviews and production reviews, this topic is usually the boundary between configuration knowledge and architecture accountability: if the underlying rationale is weak, the resulting security model is brittle even when syntax is correct.
+Migrating from a legacy IdP is a recurring source of production risk because teams often optimize for initial setup speed and under-specify lifecycle controls. Senior-level design requires explicit boundaries, failure assumptions and ownership contracts before configuration work starts.
 
-The design principle used in this book remains the same: define trust boundaries, failure modes and ownership first; only then choose Keycloak settings, adapters, proxies or automation patterns. Migration sequencing should include coexistence windows, protocol bridges and acceptance criteria tied to assurance and entitlement parity.
+## 25.2 Core mechanisms and architecture decisions
 
-## 25.2 Core model and terminology
+* Migration success depends on semantic parity: identifiers, assurance, claims, entitlement decisions.
+* Coexistence period requires routing users/apps between old and new IdP safely.
+* Cutover strategy should be reversible by cohort.
+* Stakeholder alignment (security, app owners, compliance) is as critical as protocol mapping.
 
-The useful way to reason is to separate **control plane** from **runtime plane**. The control plane defines identities, credentials, policies and metadata ownership. The runtime plane carries protocol exchanges and enforcement decisions under latency and failure constraints. Many outages come from mixing the two and assuming runtime can fix control-plane ambiguity.
+## 25.3 Chapter schema
 
-For this chapter, keep three questions in scope: who is authoritative, what is cryptographically trusted, and where decisions are enforced. If one of these answers is implicit, incident response will be slower and audit evidence will be weaker.
-
-## 25.3 Keycloak implementation perspective
-
-Keycloak should be used as a deterministic trust service, not a collection of ad-hoc toggles. Start with a written contract (issuers, audiences, key material, lifecycle rules, mapper ownership), then encode it consistently in realms, clients, flows and automation.
-
-Operationally, introduce changes with rollback posture: canary realm/client changes, measurable acceptance criteria, and explicit compatibility windows for dependent applications. Security-sensitive defaults should be enforced centrally and reviewed through pull requests rather than direct console edits.
-
-## 25.4 Architecture schema
-
-Schema 25.1 — Control plane and runtime plane for chapter 25
+Schema 25.1 — Migrating from a legacy IdP: control and runtime path
 
 ```mermaid
 flowchart TB
     subgraph CP[Control plane]
         direction TB
-        P[Policy and metadata]
-        I[Identity and credentials]
-        K[Key and trust material]
-        P --> I
-        I --> K
+        A[Migrating from a legacy IdP]
+        B[Policy and configuration]
+        C[Identity and trust data]
+        A --> B
+        B --> C
     end
 
     subgraph RP[Runtime plane]
         direction TB
-        C[Client or subject]
-        KC[Keycloak trust service]
-        E[Enforcement point]
-        R[Protected resource]
-        C --> KC
-        KC --> E
-        E --> R
+        D[Client or workload]
+        E[Keycloak]
+        F[Gateway or relying party]
+        G[Protected service]
+        D --> E
+        E --> F
+        F --> G
     end
 
     CP --> RP
 ```
 
-## 25.5 Production notes
+## 25.4 Production notes
 
 **Common mistakes**
 
-* Deploying configuration before clarifying authoritative ownership of identities, claims or policies.
-* Accepting default protocol/library behavior without explicit validation requirements.
-* Treating this topic as a one-time setup instead of an operational lifecycle.
+* Migrating apps before identity-linking strategy is validated.
+* Using email as sole stable identifier during account merge.
+* Big-bang cutover without rollback cohorts.
 
 **Best practices**
 
-* Define trust, ownership and rollback criteria in writing before rollout.
-* Measure runtime behavior with explicit SLO-oriented signals tied to this chapter's control points.
-* Rehearse failure drills that include both technical and governance decisions.
+* Build compatibility matrix per app/protocol.
+* Pilot with representative high-risk apps first.
+* Define objective acceptance tests for auth, authz, audit.
 
 **Security implications**
 
-Misconfiguration in this area usually creates silent over-trust: tokens accepted in the wrong context, stale identity data, weak assurance reuse, or unverified delegation. These are high-impact because they often preserve application availability while degrading security invisibly.
+Migration windows are attractive attack periods; monitor anomalous linking and reset activity closely.
 
 **Performance implications**
 
-Performance risk comes from hidden remote dependencies and repeated validation work. Cache strategy, timeout policy and token/session lifetimes must be tuned together; otherwise, peak load amplifies control-plane ambiguity into runtime saturation.
+Parallel-run periods increase infra load and operational complexity.
 
-## 25.6 Troubleshooting
+## 25.5 Troubleshooting
 
-If migration acceptance fails, map each failed scenario to protocol, claim semantics or entitlement mismatch. Build troubleshooting as a layered checklist: protocol correctness, cryptographic validation, policy evaluation, then infrastructure health. This ordering avoids premature scaling or unsafe hotfixes.
+* If migrated users loop at login, inspect subject mapping and session cookie domain clashes.
+* If permissions differ post-cutover, inspect role/claim translation tables.
+* If audit trails split, define cross-platform correlation strategy.
 
-## 25.7 Common misconceptions
+## 25.6 Common misconceptions
 
-* Lift-and-shift migration is rarely possible because semantics and assurance models differ.
-* "If it works in a demo, it is production-ready" — false; production requires resilience, observability and governance evidence.
-* "One successful login proves the design" — false; architecture quality is proven across lifecycle events, failure events and audit replay.
+* Migration is mostly endpoint URL replacement.
+* Legacy entitlements can be translated automatically.
+* Rollback is easy after schema and subject changes.
 
-## 25.8 Interview questions
+## 25.7 Interview questions (graded)
 
 **Beginner**
 
-1. What business problem does this chapter's topic solve in IAM?
-2. Which component in Keycloak is most directly involved?
+- **Q:** What is the primary goal of "Migrating from a legacy IdP" in a Keycloak platform?
+- **Expected answer:** Focus on plan phased migration with protocol and entitlement parity.
 
 **Intermediate**
 
-3. Which trust boundary is easiest to misconfigure here, and why?
-4. What telemetry would you add to detect failure early?
+- **Q:** Which failure mode appears first when this area is misconfigured?
+- **Expected answer:** Usually one of: Migrating apps before identity-linking strategy is validated.
 
 **Senior**
 
-5. How would you design this area for high assurance without breaking developer velocity?
-6. Which trade-offs would you document for auditors and platform owners?
+- **Q:** What design trade-off do you document before rollout for Migrating from a legacy IdP?
+- **Expected answer:** Document boundary ownership, rollback plan, and security vs latency trade-offs.
 
 **Expert**
 
-7. Describe a failure mode that remains "green" on infrastructure dashboards but is security-critical.
-8. How would you prove remediation quality after a major incident linked to this domain?
+- **Q:** How do you prove this domain is production-ready under failure?
+- **Expected answer:** By rehearsal with measurable SLO/security outcomes and audited control evidence.
 
-## 25.9 Summary
+## 25.8 Summary
 
-* This chapter's domain is fundamentally about explicit trust and ownership, not only feature enablement.
-* Keycloak implementation quality depends on mapping control-plane clarity to runtime enforcement.
-* Security and performance outcomes are coupled; both must be designed and measured together.
-* Troubleshooting quality improves dramatically when protocol, policy and infrastructure checks are ordered deliberately.
+* Migrating from a legacy IdP needs explicit control-plane decisions before runtime tuning.
+* Failure modes are predictable and should be tested deliberately.
+* Security and performance implications must be treated together.
+* Interview-grade answers should combine mechanism detail and operational trade-offs.
 
-## 25.10 References
+## 25.9 References
 
 * OIDC Core 1.0
 * SAML 2.0
@@ -3586,241 +3467,231 @@ If migration acceptance fails, map each failed scenario to protocol, claim seman
 # Chapter 26 — IAM ↔ PKI convergence: mTLS, HSM, certificate lifecycle
 
 > **Objectives of this chapter**
-> By the end of it you will be able to: explain why this domain exists in enterprise IAM, use precise vocabulary when designing with Keycloak, map the topic to production controls, diagnose common failure patterns, and answer graded interview questions with architecture-level trade-off reasoning.
+> Unify human and workload trust with shared key governance.
 
-## 26.1 Why this chapter matters before implementation
+## 26.1 Why this topic exists (before how)
 
-IAM and PKI convergence is where human and workload trust models align, especially for sender-constrained tokens and machine-to-machine identity. In interviews and production reviews, this topic is usually the boundary between configuration knowledge and architecture accountability: if the underlying rationale is weak, the resulting security model is brittle even when syntax is correct.
+IAM ↔ PKI convergence: mTLS, HSM, certificate lifecycle is a recurring source of production risk because teams often optimize for initial setup speed and under-specify lifecycle controls. Senior-level design requires explicit boundaries, failure assumptions and ownership contracts before configuration work starts.
 
-The design principle used in this book remains the same: define trust boundaries, failure modes and ownership first; only then choose Keycloak settings, adapters, proxies or automation patterns. Convergence architecture should standardize key ownership, certificate issuance and policy enforcement for both human and workload paths.
+## 26.2 Core mechanisms and architecture decisions
 
-## 26.2 Core model and terminology
+* Convergence joins user and workload trust models under shared key governance.
+* mTLS authenticates clients at transport layer while IAM handles identity context and policy.
+* HSM protects high-value signing and client-auth keys.
+* Certificate lifecycle automation prevents stale identity credentials.
 
-The useful way to reason is to separate **control plane** from **runtime plane**. The control plane defines identities, credentials, policies and metadata ownership. The runtime plane carries protocol exchanges and enforcement decisions under latency and failure constraints. Many outages come from mixing the two and assuming runtime can fix control-plane ambiguity.
+## 26.3 Chapter schema
 
-For this chapter, keep three questions in scope: who is authoritative, what is cryptographically trusted, and where decisions are enforced. If one of these answers is implicit, incident response will be slower and audit evidence will be weaker.
-
-## 26.3 Keycloak implementation perspective
-
-Keycloak should be used as a deterministic trust service, not a collection of ad-hoc toggles. Start with a written contract (issuers, audiences, key material, lifecycle rules, mapper ownership), then encode it consistently in realms, clients, flows and automation.
-
-Operationally, introduce changes with rollback posture: canary realm/client changes, measurable acceptance criteria, and explicit compatibility windows for dependent applications. Security-sensitive defaults should be enforced centrally and reviewed through pull requests rather than direct console edits.
-
-## 26.4 Architecture schema
-
-Schema 26.1 — Control plane and runtime plane for chapter 26
+Schema 26.1 — IAM ↔ PKI convergence: mTLS, HSM, certificate lifecycle: control and runtime path
 
 ```mermaid
 flowchart TB
     subgraph CP[Control plane]
         direction TB
-        P[Policy and metadata]
-        I[Identity and credentials]
-        K[Key and trust material]
-        P --> I
-        I --> K
+        A[IAM ↔ PKI convergence: mTLS, HSM, certificate lifecycle]
+        B[Policy and configuration]
+        C[Identity and trust data]
+        A --> B
+        B --> C
     end
 
     subgraph RP[Runtime plane]
         direction TB
-        C[Client or subject]
-        KC[Keycloak trust service]
-        E[Enforcement point]
-        R[Protected resource]
-        C --> KC
-        KC --> E
-        E --> R
+        D[Client or workload]
+        E[Keycloak]
+        F[Gateway or relying party]
+        G[Protected service]
+        D --> E
+        E --> F
+        F --> G
     end
 
     CP --> RP
 ```
 
-## 26.5 Production notes
+## 26.4 Production notes
 
 **Common mistakes**
 
-* Deploying configuration before clarifying authoritative ownership of identities, claims or policies.
-* Accepting default protocol/library behavior without explicit validation requirements.
-* Treating this topic as a one-time setup instead of an operational lifecycle.
+* Issuing long-lived workload certs without revocation strategy.
+* Separate unmanaged key stores per team.
+* No mapping between certificate subject and IAM policy context.
 
 **Best practices**
 
-* Define trust, ownership and rollback criteria in writing before rollout.
-* Measure runtime behavior with explicit SLO-oriented signals tied to this chapter's control points.
-* Rehearse failure drills that include both technical and governance decisions.
+* Define PKI profiles per workload class.
+* Integrate certificate issuance/renewal with workload orchestration.
+* Use hardware-backed keys for root/intermediate and critical signing roles.
 
 **Security implications**
 
-Misconfiguration in this area usually creates silent over-trust: tokens accepted in the wrong context, stale identity data, weak assurance reuse, or unverified delegation. These are high-impact because they often preserve application availability while degrading security invisibly.
+Compromised workload private keys can enable silent API impersonation; rapid revocation and re-issuance paths are mandatory.
 
 **Performance implications**
 
-Performance risk comes from hidden remote dependencies and repeated validation work. Cache strategy, timeout policy and token/session lifetimes must be tuned together; otherwise, peak load amplifies control-plane ambiguity into runtime saturation.
+Frequent cert rotation increases control-plane operations; automation and cache design are required to keep latency stable.
 
-## 26.6 Troubleshooting
+## 26.5 Troubleshooting
 
-If certificate-bound flows fail, inspect CA chain trust, SAN usage and client key storage constraints. Build troubleshooting as a layered checklist: protocol correctness, cryptographic validation, policy evaluation, then infrastructure health. This ordering avoids premature scaling or unsafe hotfixes.
+* If mTLS auth fails, inspect SAN/EKU and trust chain.
+* If cert-bound token rejected, inspect cnf/thumbprint binding checks.
+* If renewals fail at scale, inspect CA rate limits and agent retries.
 
-## 26.7 Common misconceptions
+## 26.6 Common misconceptions
 
-* mTLS alone is not a full workload identity strategy without lifecycle and revocation governance.
-* "If it works in a demo, it is production-ready" — false; production requires resilience, observability and governance evidence.
-* "One successful login proves the design" — false; architecture quality is proven across lifecycle events, failure events and audit replay.
+* mTLS alone replaces IAM authorization.
+* HSM is optional for critical signing keys in regulated environments.
+* Certificate expiry monitoring is sufficient without automated renewal.
 
-## 26.8 Interview questions
+## 26.7 Interview questions (graded)
 
 **Beginner**
 
-1. What business problem does this chapter's topic solve in IAM?
-2. Which component in Keycloak is most directly involved?
+- **Q:** What is the primary goal of "IAM ↔ PKI convergence: mTLS, HSM, certificate lifecycle" in a Keycloak platform?
+- **Expected answer:** Focus on unify human and workload trust with shared key governance.
 
 **Intermediate**
 
-3. Which trust boundary is easiest to misconfigure here, and why?
-4. What telemetry would you add to detect failure early?
+- **Q:** Which failure mode appears first when this area is misconfigured?
+- **Expected answer:** Usually one of: Issuing long-lived workload certs without revocation strategy.
 
 **Senior**
 
-5. How would you design this area for high assurance without breaking developer velocity?
-6. Which trade-offs would you document for auditors and platform owners?
+- **Q:** What design trade-off do you document before rollout for IAM ↔ PKI convergence: mTLS, HSM, certificate lifecycle?
+- **Expected answer:** Document boundary ownership, rollback plan, and security vs latency trade-offs.
 
 **Expert**
 
-7. Describe a failure mode that remains "green" on infrastructure dashboards but is security-critical.
-8. How would you prove remediation quality after a major incident linked to this domain?
+- **Q:** How do you prove this domain is production-ready under failure?
+- **Expected answer:** By rehearsal with measurable SLO/security outcomes and audited control evidence.
 
-## 26.9 Summary
+## 26.8 Summary
 
-* This chapter's domain is fundamentally about explicit trust and ownership, not only feature enablement.
-* Keycloak implementation quality depends on mapping control-plane clarity to runtime enforcement.
-* Security and performance outcomes are coupled; both must be designed and measured together.
-* Troubleshooting quality improves dramatically when protocol, policy and infrastructure checks are ordered deliberately.
+* IAM ↔ PKI convergence: mTLS, HSM, certificate lifecycle needs explicit control-plane decisions before runtime tuning.
+* Failure modes are predictable and should be tested deliberately.
+* Security and performance implications must be treated together.
+* Interview-grade answers should combine mechanism detail and operational trade-offs.
 
-## 26.10 References
+## 26.9 References
 
 * RFC 8705
 * RFC 5280
-* RFC 9449
 * NIST SP 800-57
+* RFC 9449
 
 
 # Chapter 27 — Comparison: Keycloak, RHBK, Okta, Entra ID, Ping Identity, ForgeRock, Auth0
 
 > **Objectives of this chapter**
-> By the end of it you will be able to: explain why this domain exists in enterprise IAM, use precise vocabulary when designing with Keycloak, map the topic to production controls, diagnose common failure patterns, and answer graded interview questions with architecture-level trade-off reasoning.
+> Evaluate platforms using architecture and operating model fit.
 
-## 27.1 Why this chapter matters before implementation
+## 27.1 Why this topic exists (before how)
 
-Product comparison matters because IAM decisions are long-lived platform decisions constrained by regulation, operating model and ecosystem fit. In interviews and production reviews, this topic is usually the boundary between configuration knowledge and architecture accountability: if the underlying rationale is weak, the resulting security model is brittle even when syntax is correct.
+Comparison: Keycloak, RHBK, Okta, Entra ID, Ping Identity, ForgeRock, Auth0 is a recurring source of production risk because teams often optimize for initial setup speed and under-specify lifecycle controls. Senior-level design requires explicit boundaries, failure assumptions and ownership contracts before configuration work starts.
 
-The design principle used in this book remains the same: define trust boundaries, failure modes and ownership first; only then choose Keycloak settings, adapters, proxies or automation patterns. Comparison should be evidence-driven: map capabilities to requirements and include operational constraints, not feature checklist alone.
+## 27.2 Core mechanisms and architecture decisions
 
-## 27.2 Core model and terminology
+* Platform comparison should start from requirements: assurance, tenancy, deployment model, compliance, extensibility.
+* Open-source vs managed SaaS shifts responsibility boundaries.
+* Ecosystem fit (directory integration, policy tooling, SIEM, DevOps model) often outweighs feature checklists.
+* TCO includes staffing and operational maturity, not licenses alone.
 
-The useful way to reason is to separate **control plane** from **runtime plane**. The control plane defines identities, credentials, policies and metadata ownership. The runtime plane carries protocol exchanges and enforcement decisions under latency and failure constraints. Many outages come from mixing the two and assuming runtime can fix control-plane ambiguity.
+## 27.3 Chapter schema
 
-For this chapter, keep three questions in scope: who is authoritative, what is cryptographically trusted, and where decisions are enforced. If one of these answers is implicit, incident response will be slower and audit evidence will be weaker.
-
-## 27.3 Keycloak implementation perspective
-
-Keycloak should be used as a deterministic trust service, not a collection of ad-hoc toggles. Start with a written contract (issuers, audiences, key material, lifecycle rules, mapper ownership), then encode it consistently in realms, clients, flows and automation.
-
-Operationally, introduce changes with rollback posture: canary realm/client changes, measurable acceptance criteria, and explicit compatibility windows for dependent applications. Security-sensitive defaults should be enforced centrally and reviewed through pull requests rather than direct console edits.
-
-## 27.4 Architecture schema
-
-Schema 27.1 — Control plane and runtime plane for chapter 27
+Schema 27.1 — Comparison: Keycloak, RHBK, Okta, Entra ID, Ping Identity, ForgeRock, Auth0: control and runtime path
 
 ```mermaid
 flowchart TB
     subgraph CP[Control plane]
         direction TB
-        P[Policy and metadata]
-        I[Identity and credentials]
-        K[Key and trust material]
-        P --> I
-        I --> K
+        A[Comparison: Keycloak, RHBK, Okta, Entra ID, Ping Identity, ForgeRock, Auth0]
+        B[Policy and configuration]
+        C[Identity and trust data]
+        A --> B
+        B --> C
     end
 
     subgraph RP[Runtime plane]
         direction TB
-        C[Client or subject]
-        KC[Keycloak trust service]
-        E[Enforcement point]
-        R[Protected resource]
-        C --> KC
-        KC --> E
-        E --> R
+        D[Client or workload]
+        E[Keycloak]
+        F[Gateway or relying party]
+        G[Protected service]
+        D --> E
+        E --> F
+        F --> G
     end
 
     CP --> RP
 ```
 
-## 27.5 Production notes
+## 27.4 Production notes
 
 **Common mistakes**
 
-* Deploying configuration before clarifying authoritative ownership of identities, claims or policies.
-* Accepting default protocol/library behavior without explicit validation requirements.
-* Treating this topic as a one-time setup instead of an operational lifecycle.
+* Choosing by vendor demo UX only.
+* Ignoring data residency and key custody constraints.
+* Underestimating migration lock-in from proprietary policy models.
 
 **Best practices**
 
-* Define trust, ownership and rollback criteria in writing before rollout.
-* Measure runtime behavior with explicit SLO-oriented signals tied to this chapter's control points.
-* Rehearse failure drills that include both technical and governance decisions.
+* Use weighted scorecard with mandatory and optional criteria.
+* Run proof-of-value with representative integrations.
+* Document exit strategy and data portability expectations.
 
 **Security implications**
 
-Misconfiguration in this area usually creates silent over-trust: tokens accepted in the wrong context, stale identity data, weak assurance reuse, or unverified delegation. These are high-impact because they often preserve application availability while degrading security invisibly.
+Managed platforms reduce ops burden but may constrain forensic depth or key custody options.
 
 **Performance implications**
 
-Performance risk comes from hidden remote dependencies and repeated validation work. Cache strategy, timeout policy and token/session lifetimes must be tuned together; otherwise, peak load amplifies control-plane ambiguity into runtime saturation.
+Performance depends on deployment locality and tenancy model; benchmark with your traffic and geography.
 
-## 27.6 Troubleshooting
+## 27.5 Troubleshooting
 
-For contested platform choice, run a weighted scorecard using agreed non-functional requirements and audit findings. Build troubleshooting as a layered checklist: protocol correctness, cryptographic validation, policy evaluation, then infrastructure health. This ordering avoids premature scaling or unsafe hotfixes.
+* If two products score close, inspect operating model fit and incident response control.
+* If stakeholders disagree, separate compliance blockers from preference items.
+* If PoC success is not reproducible, inspect environment parity and hidden managed features.
 
-## 27.7 Common misconceptions
+## 27.6 Common misconceptions
 
-* A feature-rich vendor is not automatically the best fit if operating model and compliance needs mismatch.
-* "If it works in a demo, it is production-ready" — false; production requires resilience, observability and governance evidence.
-* "One successful login proves the design" — false; architecture quality is proven across lifecycle events, failure events and audit replay.
+* More built-in features always means better fit.
+* Open-source always means lower cost.
+* Vendor lock-in is only a contract topic.
 
-## 27.8 Interview questions
+## 27.7 Interview questions (graded)
 
 **Beginner**
 
-1. What business problem does this chapter's topic solve in IAM?
-2. Which component in Keycloak is most directly involved?
+- **Q:** What is the primary goal of "Comparison: Keycloak, RHBK, Okta, Entra ID, Ping Identity, ForgeRock, Auth0" in a Keycloak platform?
+- **Expected answer:** Focus on evaluate platforms using architecture and operating model fit.
 
 **Intermediate**
 
-3. Which trust boundary is easiest to misconfigure here, and why?
-4. What telemetry would you add to detect failure early?
+- **Q:** Which failure mode appears first when this area is misconfigured?
+- **Expected answer:** Usually one of: Choosing by vendor demo UX only.
 
 **Senior**
 
-5. How would you design this area for high assurance without breaking developer velocity?
-6. Which trade-offs would you document for auditors and platform owners?
+- **Q:** What design trade-off do you document before rollout for Comparison: Keycloak, RHBK, Okta, Entra ID, Ping Identity, ForgeRock, Auth0?
+- **Expected answer:** Document boundary ownership, rollback plan, and security vs latency trade-offs.
 
 **Expert**
 
-7. Describe a failure mode that remains "green" on infrastructure dashboards but is security-critical.
-8. How would you prove remediation quality after a major incident linked to this domain?
+- **Q:** How do you prove this domain is production-ready under failure?
+- **Expected answer:** By rehearsal with measurable SLO/security outcomes and audited control evidence.
 
-## 27.9 Summary
+## 27.8 Summary
 
-* This chapter's domain is fundamentally about explicit trust and ownership, not only feature enablement.
-* Keycloak implementation quality depends on mapping control-plane clarity to runtime enforcement.
-* Security and performance outcomes are coupled; both must be designed and measured together.
-* Troubleshooting quality improves dramatically when protocol, policy and infrastructure checks are ordered deliberately.
+* Comparison: Keycloak, RHBK, Okta, Entra ID, Ping Identity, ForgeRock, Auth0 needs explicit control-plane decisions before runtime tuning.
+* Failure modes are predictable and should be tested deliberately.
+* Security and performance implications must be treated together.
+* Interview-grade answers should combine mechanism detail and operational trade-offs.
 
-## 27.10 References
+## 27.9 References
 
 * OIDC certification program
-* OAuth 2.0 profiles
+* OAuth profiles
 * SOC 2 controls
 * ISO 27001 Annex A
 
@@ -3828,238 +3699,228 @@ For contested platform choice, run a weighted scorecard using agreed non-functio
 # Chapter 28 — Labs (Docker Compose, Kubernetes, OpenShift)
 
 > **Objectives of this chapter**
-> By the end of it you will be able to: explain why this domain exists in enterprise IAM, use precise vocabulary when designing with Keycloak, map the topic to production controls, diagnose common failure patterns, and answer graded interview questions with architecture-level trade-off reasoning.
+> Execute reproducible labs for capability validation and runbook rehearsal.
 
-## 28.1 Why this chapter matters before implementation
+## 28.1 Why this topic exists (before how)
 
-Labs turn conceptual knowledge into operational reflexes; repeatable exercises expose hidden assumptions before production does. In interviews and production reviews, this topic is usually the boundary between configuration knowledge and architecture accountability: if the underlying rationale is weak, the resulting security model is brittle even when syntax is correct.
+Labs (Docker Compose, Kubernetes, OpenShift) is a recurring source of production risk because teams often optimize for initial setup speed and under-specify lifecycle controls. Senior-level design requires explicit boundaries, failure assumptions and ownership contracts before configuration work starts.
 
-The design principle used in this book remains the same: define trust boundaries, failure modes and ownership first; only then choose Keycloak settings, adapters, proxies or automation patterns. Each lab should have deterministic prerequisites, expected outputs and reset procedures so teams can rehearse repeatedly.
+## 28.2 Core mechanisms and architecture decisions
 
-## 28.2 Core model and terminology
+* Labs validate assumptions before production by making failures observable.
+* Compose labs accelerate local protocol experiments.
+* Kubernetes/OpenShift labs validate operational behaviors: probes, scaling, network policy.
+* Good labs include setup, expected output, and reset/cleanup.
 
-The useful way to reason is to separate **control plane** from **runtime plane**. The control plane defines identities, credentials, policies and metadata ownership. The runtime plane carries protocol exchanges and enforcement decisions under latency and failure constraints. Many outages come from mixing the two and assuming runtime can fix control-plane ambiguity.
+## 28.3 Chapter schema
 
-For this chapter, keep three questions in scope: who is authoritative, what is cryptographically trusted, and where decisions are enforced. If one of these answers is implicit, incident response will be slower and audit evidence will be weaker.
-
-## 28.3 Keycloak implementation perspective
-
-Keycloak should be used as a deterministic trust service, not a collection of ad-hoc toggles. Start with a written contract (issuers, audiences, key material, lifecycle rules, mapper ownership), then encode it consistently in realms, clients, flows and automation.
-
-Operationally, introduce changes with rollback posture: canary realm/client changes, measurable acceptance criteria, and explicit compatibility windows for dependent applications. Security-sensitive defaults should be enforced centrally and reviewed through pull requests rather than direct console edits.
-
-## 28.4 Architecture schema
-
-Schema 28.1 — Control plane and runtime plane for chapter 28
+Schema 28.1 — Labs (Docker Compose, Kubernetes, OpenShift): control and runtime path
 
 ```mermaid
 flowchart TB
     subgraph CP[Control plane]
         direction TB
-        P[Policy and metadata]
-        I[Identity and credentials]
-        K[Key and trust material]
-        P --> I
-        I --> K
+        A[Labs (Docker Compose, Kubernetes, OpenShift)]
+        B[Policy and configuration]
+        C[Identity and trust data]
+        A --> B
+        B --> C
     end
 
     subgraph RP[Runtime plane]
         direction TB
-        C[Client or subject]
-        KC[Keycloak trust service]
-        E[Enforcement point]
-        R[Protected resource]
-        C --> KC
-        KC --> E
-        E --> R
+        D[Client or workload]
+        E[Keycloak]
+        F[Gateway or relying party]
+        G[Protected service]
+        D --> E
+        E --> F
+        F --> G
     end
 
     CP --> RP
 ```
 
-## 28.5 Production notes
+## 28.4 Production notes
 
 **Common mistakes**
 
-* Deploying configuration before clarifying authoritative ownership of identities, claims or policies.
-* Accepting default protocol/library behavior without explicit validation requirements.
-* Treating this topic as a one-time setup instead of an operational lifecycle.
+* Labs without fixed versions causing drifting outcomes.
+* Skipping negative/failure-path exercises.
+* No scripted teardown leaving polluted state.
 
 **Best practices**
 
-* Define trust, ownership and rollback criteria in writing before rollout.
-* Measure runtime behavior with explicit SLO-oriented signals tied to this chapter's control points.
-* Rehearse failure drills that include both technical and governance decisions.
+* Pin versions and publish known-good hashes.
+* Include assertion checkpoints for each lab step.
+* Automate reset to baseline data/config.
 
 **Security implications**
 
-Misconfiguration in this area usually creates silent over-trust: tokens accepted in the wrong context, stale identity data, weak assurance reuse, or unverified delegation. These are high-impact because they often preserve application availability while degrading security invisibly.
+Lab credentials and sample tokens can leak if reused; enforce non-production secrets and clear banners.
 
 **Performance implications**
 
-Performance risk comes from hidden remote dependencies and repeated validation work. Cache strategy, timeout policy and token/session lifetimes must be tuned together; otherwise, peak load amplifies control-plane ambiguity into runtime saturation.
+Lab observability should mimic production enough to teach bottleneck diagnosis.
 
-## 28.6 Troubleshooting
+## 28.5 Troubleshooting
 
-If lab outcomes are inconsistent, reset persisted data and pin image versions to remove environmental drift. Build troubleshooting as a layered checklist: protocol correctness, cryptographic validation, policy evaluation, then infrastructure health. This ordering avoids premature scaling or unsafe hotfixes.
+* If lab output diverges, verify image tags and seed data.
+* If OAuth flow differs by browser, inspect SameSite and redirect settings.
+* If k8s lab unstable, inspect resource quotas and node pressure.
 
-## 28.7 Common misconceptions
+## 28.6 Common misconceptions
 
-* Running a lab once is not operational mastery; repetition under varied failure conditions is needed.
-* "If it works in a demo, it is production-ready" — false; production requires resilience, observability and governance evidence.
-* "One successful login proves the design" — false; architecture quality is proven across lifecycle events, failure events and audit replay.
+* Hands-on labs are optional for senior-level understanding.
+* One successful run proves architecture readiness.
+* Local compose results directly predict multi-zone behavior.
 
-## 28.8 Interview questions
+## 28.7 Interview questions (graded)
 
 **Beginner**
 
-1. What business problem does this chapter's topic solve in IAM?
-2. Which component in Keycloak is most directly involved?
+- **Q:** What is the primary goal of "Labs (Docker Compose, Kubernetes, OpenShift)" in a Keycloak platform?
+- **Expected answer:** Focus on execute reproducible labs for capability validation and runbook rehearsal.
 
 **Intermediate**
 
-3. Which trust boundary is easiest to misconfigure here, and why?
-4. What telemetry would you add to detect failure early?
+- **Q:** Which failure mode appears first when this area is misconfigured?
+- **Expected answer:** Usually one of: Labs without fixed versions causing drifting outcomes.
 
 **Senior**
 
-5. How would you design this area for high assurance without breaking developer velocity?
-6. Which trade-offs would you document for auditors and platform owners?
+- **Q:** What design trade-off do you document before rollout for Labs (Docker Compose, Kubernetes, OpenShift)?
+- **Expected answer:** Document boundary ownership, rollback plan, and security vs latency trade-offs.
 
 **Expert**
 
-7. Describe a failure mode that remains "green" on infrastructure dashboards but is security-critical.
-8. How would you prove remediation quality after a major incident linked to this domain?
+- **Q:** How do you prove this domain is production-ready under failure?
+- **Expected answer:** By rehearsal with measurable SLO/security outcomes and audited control evidence.
 
-## 28.9 Summary
+## 28.8 Summary
 
-* This chapter's domain is fundamentally about explicit trust and ownership, not only feature enablement.
-* Keycloak implementation quality depends on mapping control-plane clarity to runtime enforcement.
-* Security and performance outcomes are coupled; both must be designed and measured together.
-* Troubleshooting quality improves dramatically when protocol, policy and infrastructure checks are ordered deliberately.
+* Labs (Docker Compose, Kubernetes, OpenShift) needs explicit control-plane decisions before runtime tuning.
+* Failure modes are predictable and should be tested deliberately.
+* Security and performance implications must be treated together.
+* Interview-grade answers should combine mechanism detail and operational trade-offs.
 
-## 28.10 References
+## 28.9 References
 
 * Docker Compose spec
 * Kubernetes docs
 * OpenShift docs
-* CNCF security whitepaper
+* CNCF security guidance
 
 
 # Chapter 29 — Production incident walkthroughs
 
 > **Objectives of this chapter**
-> By the end of it you will be able to: explain why this domain exists in enterprise IAM, use precise vocabulary when designing with Keycloak, map the topic to production controls, diagnose common failure patterns, and answer graded interview questions with architecture-level trade-off reasoning.
+> Use timeline-driven diagnostics and containment patterns.
 
-## 29.1 Why this chapter matters before implementation
+## 29.1 Why this topic exists (before how)
 
-Incident walkthroughs teach diagnosis order under pressure, which is rarely learned from happy-path implementation guides. In interviews and production reviews, this topic is usually the boundary between configuration knowledge and architecture accountability: if the underlying rationale is weak, the resulting security model is brittle even when syntax is correct.
+Production incident walkthroughs is a recurring source of production risk because teams often optimize for initial setup speed and under-specify lifecycle controls. Senior-level design requires explicit boundaries, failure assumptions and ownership contracts before configuration work starts.
 
-The design principle used in this book remains the same: define trust boundaries, failure modes and ownership first; only then choose Keycloak settings, adapters, proxies or automation patterns. Walkthrough quality depends on timeline precision: symptom, hypothesis, validation, mitigation and permanent fix.
+## 29.2 Core mechanisms and architecture decisions
 
-## 29.2 Core model and terminology
+* Incident walkthroughs build decision quality under uncertainty.
+* Use timeline: detection, triage, containment, eradication, recovery, lessons.
+* Identity incidents often combine protocol, infra, and governance factors.
+* Post-incident actions must include control hardening and validation.
 
-The useful way to reason is to separate **control plane** from **runtime plane**. The control plane defines identities, credentials, policies and metadata ownership. The runtime plane carries protocol exchanges and enforcement decisions under latency and failure constraints. Many outages come from mixing the two and assuming runtime can fix control-plane ambiguity.
+## 29.3 Chapter schema
 
-For this chapter, keep three questions in scope: who is authoritative, what is cryptographically trusted, and where decisions are enforced. If one of these answers is implicit, incident response will be slower and audit evidence will be weaker.
-
-## 29.3 Keycloak implementation perspective
-
-Keycloak should be used as a deterministic trust service, not a collection of ad-hoc toggles. Start with a written contract (issuers, audiences, key material, lifecycle rules, mapper ownership), then encode it consistently in realms, clients, flows and automation.
-
-Operationally, introduce changes with rollback posture: canary realm/client changes, measurable acceptance criteria, and explicit compatibility windows for dependent applications. Security-sensitive defaults should be enforced centrally and reviewed through pull requests rather than direct console edits.
-
-## 29.4 Architecture schema
-
-Schema 29.1 — Control plane and runtime plane for chapter 29
+Schema 29.1 — Production incident walkthroughs: control and runtime path
 
 ```mermaid
 flowchart TB
     subgraph CP[Control plane]
         direction TB
-        P[Policy and metadata]
-        I[Identity and credentials]
-        K[Key and trust material]
-        P --> I
-        I --> K
+        A[Production incident walkthroughs]
+        B[Policy and configuration]
+        C[Identity and trust data]
+        A --> B
+        B --> C
     end
 
     subgraph RP[Runtime plane]
         direction TB
-        C[Client or subject]
-        KC[Keycloak trust service]
-        E[Enforcement point]
-        R[Protected resource]
-        C --> KC
-        KC --> E
-        E --> R
+        D[Client or workload]
+        E[Keycloak]
+        F[Gateway or relying party]
+        G[Protected service]
+        D --> E
+        E --> F
+        F --> G
     end
 
     CP --> RP
 ```
 
-## 29.5 Production notes
+## 29.4 Production notes
 
 **Common mistakes**
 
-* Deploying configuration before clarifying authoritative ownership of identities, claims or policies.
-* Accepting default protocol/library behavior without explicit validation requirements.
-* Treating this topic as a one-time setup instead of an operational lifecycle.
+* Declaring incident resolved after service restoration only.
+* No preserved evidence for forensic reconstruction.
+* Skipping communication plan for dependent app teams.
 
 **Best practices**
 
-* Define trust, ownership and rollback criteria in writing before rollout.
-* Measure runtime behavior with explicit SLO-oriented signals tied to this chapter's control points.
-* Rehearse failure drills that include both technical and governance decisions.
+* Use predefined severity matrix and escalation paths.
+* Capture immutable event snapshots early.
+* Track corrective actions to closure with measurable verification.
 
 **Security implications**
 
-Misconfiguration in this area usually creates silent over-trust: tokens accepted in the wrong context, stale identity data, weak assurance reuse, or unverified delegation. These are high-impact because they often preserve application availability while degrading security invisibly.
+Incident channels can leak sensitive data; apply least-disclosure even during emergencies.
 
 **Performance implications**
 
-Performance risk comes from hidden remote dependencies and repeated validation work. Cache strategy, timeout policy and token/session lifetimes must be tuned together; otherwise, peak load amplifies control-plane ambiguity into runtime saturation.
+Containment actions (e.g., global token revocation) can create traffic spikes and user impact; plan staged execution.
 
-## 29.6 Troubleshooting
+## 29.5 Troubleshooting
 
-If incident diagnosis stalls, enforce timeline reconstruction from logs before proposing fixes. Build troubleshooting as a layered checklist: protocol correctness, cryptographic validation, policy evaluation, then infrastructure health. This ordering avoids premature scaling or unsafe hotfixes.
+* If root cause unclear, reconstruct exact request timeline before patching.
+* If false positives overwhelm responders, tune correlation thresholds and context.
+* If recurrence happens, inspect whether lessons-learned actions were actually deployed.
 
-## 29.7 Common misconceptions
+## 29.6 Common misconceptions
 
-* Incident closure is not complete when service is restored; root cause and control hardening must follow.
-* "If it works in a demo, it is production-ready" — false; production requires resilience, observability and governance evidence.
-* "One successful login proves the design" — false; architecture quality is proven across lifecycle events, failure events and audit replay.
+* No breach occurred if uptime stayed high.
+* Manual hotfixes are enough without postmortem rigor.
+* Identity incidents are always purely security-team issues.
 
-## 29.8 Interview questions
+## 29.7 Interview questions (graded)
 
 **Beginner**
 
-1. What business problem does this chapter's topic solve in IAM?
-2. Which component in Keycloak is most directly involved?
+- **Q:** What is the primary goal of "Production incident walkthroughs" in a Keycloak platform?
+- **Expected answer:** Focus on use timeline-driven diagnostics and containment patterns.
 
 **Intermediate**
 
-3. Which trust boundary is easiest to misconfigure here, and why?
-4. What telemetry would you add to detect failure early?
+- **Q:** Which failure mode appears first when this area is misconfigured?
+- **Expected answer:** Usually one of: Declaring incident resolved after service restoration only.
 
 **Senior**
 
-5. How would you design this area for high assurance without breaking developer velocity?
-6. Which trade-offs would you document for auditors and platform owners?
+- **Q:** What design trade-off do you document before rollout for Production incident walkthroughs?
+- **Expected answer:** Document boundary ownership, rollback plan, and security vs latency trade-offs.
 
 **Expert**
 
-7. Describe a failure mode that remains "green" on infrastructure dashboards but is security-critical.
-8. How would you prove remediation quality after a major incident linked to this domain?
+- **Q:** How do you prove this domain is production-ready under failure?
+- **Expected answer:** By rehearsal with measurable SLO/security outcomes and audited control evidence.
 
-## 29.9 Summary
+## 29.8 Summary
 
-* This chapter's domain is fundamentally about explicit trust and ownership, not only feature enablement.
-* Keycloak implementation quality depends on mapping control-plane clarity to runtime enforcement.
-* Security and performance outcomes are coupled; both must be designed and measured together.
-* Troubleshooting quality improves dramatically when protocol, policy and infrastructure checks are ordered deliberately.
+* Production incident walkthroughs needs explicit control-plane decisions before runtime tuning.
+* Failure modes are predictable and should be tested deliberately.
+* Security and performance implications must be treated together.
+* Interview-grade answers should combine mechanism detail and operational trade-offs.
 
-## 29.10 References
+## 29.9 References
 
 * NIST 800-61
 * Google SRE incident response
@@ -4070,120 +3931,115 @@ If incident diagnosis stalls, enforce timeline reconstruction from logs before p
 # Chapter 30 — Architecture case studies
 
 > **Objectives of this chapter**
-> By the end of it you will be able to: explain why this domain exists in enterprise IAM, use precise vocabulary when designing with Keycloak, map the topic to production controls, diagnose common failure patterns, and answer graded interview questions with architecture-level trade-off reasoning.
+> Reason through real trade-offs across scale, regulation and budget.
 
-## 30.1 Why this chapter matters before implementation
+## 30.1 Why this topic exists (before how)
 
-Case studies force explicit trade-off reasoning across compliance, performance, budget and organisational constraints. In interviews and production reviews, this topic is usually the boundary between configuration knowledge and architecture accountability: if the underlying rationale is weak, the resulting security model is brittle even when syntax is correct.
+Architecture case studies is a recurring source of production risk because teams often optimize for initial setup speed and under-specify lifecycle controls. Senior-level design requires explicit boundaries, failure assumptions and ownership contracts before configuration work starts.
 
-The design principle used in this book remains the same: define trust boundaries, failure modes and ownership first; only then choose Keycloak settings, adapters, proxies or automation patterns. Case studies are valuable when they reveal rejected options and the decision criteria, not only the final diagram.
+## 30.2 Core mechanisms and architecture decisions
 
-## 30.2 Core model and terminology
+* Case studies force explicit trade-offs among security, UX, cost, and delivery speed.
+* Decision records should include rejected options and assumptions.
+* Architecture quality is judged by failure behavior, not only happy-path diagrams.
+* Cross-domain constraints (legal, regional, org maturity) shape feasible patterns.
 
-The useful way to reason is to separate **control plane** from **runtime plane**. The control plane defines identities, credentials, policies and metadata ownership. The runtime plane carries protocol exchanges and enforcement decisions under latency and failure constraints. Many outages come from mixing the two and assuming runtime can fix control-plane ambiguity.
+## 30.3 Chapter schema
 
-For this chapter, keep three questions in scope: who is authoritative, what is cryptographically trusted, and where decisions are enforced. If one of these answers is implicit, incident response will be slower and audit evidence will be weaker.
-
-## 30.3 Keycloak implementation perspective
-
-Keycloak should be used as a deterministic trust service, not a collection of ad-hoc toggles. Start with a written contract (issuers, audiences, key material, lifecycle rules, mapper ownership), then encode it consistently in realms, clients, flows and automation.
-
-Operationally, introduce changes with rollback posture: canary realm/client changes, measurable acceptance criteria, and explicit compatibility windows for dependent applications. Security-sensitive defaults should be enforced centrally and reviewed through pull requests rather than direct console edits.
-
-## 30.4 Architecture schema
-
-Schema 30.1 — Control plane and runtime plane for chapter 30
+Schema 30.1 — Architecture case studies: control and runtime path
 
 ```mermaid
 flowchart TB
     subgraph CP[Control plane]
         direction TB
-        P[Policy and metadata]
-        I[Identity and credentials]
-        K[Key and trust material]
-        P --> I
-        I --> K
+        A[Architecture case studies]
+        B[Policy and configuration]
+        C[Identity and trust data]
+        A --> B
+        B --> C
     end
 
     subgraph RP[Runtime plane]
         direction TB
-        C[Client or subject]
-        KC[Keycloak trust service]
-        E[Enforcement point]
-        R[Protected resource]
-        C --> KC
-        KC --> E
-        E --> R
+        D[Client or workload]
+        E[Keycloak]
+        F[Gateway or relying party]
+        G[Protected service]
+        D --> E
+        E --> F
+        F --> G
     end
 
     CP --> RP
 ```
 
-## 30.5 Production notes
+## 30.4 Production notes
 
 **Common mistakes**
 
-* Deploying configuration before clarifying authoritative ownership of identities, claims or policies.
-* Accepting default protocol/library behavior without explicit validation requirements.
-* Treating this topic as a one-time setup instead of an operational lifecycle.
+* Presenting one final architecture without alternatives.
+* Ignoring organizational capability constraints.
+* No measurable success criteria.
 
 **Best practices**
 
-* Define trust, ownership and rollback criteria in writing before rollout.
-* Measure runtime behavior with explicit SLO-oriented signals tied to this chapter's control points.
-* Rehearse failure drills that include both technical and governance decisions.
+* Use ADRs with risk/impact scoring.
+* Model failure scenarios for each candidate architecture.
+* Define phased implementation roadmap with checkpoints.
 
 **Security implications**
 
-Misconfiguration in this area usually creates silent over-trust: tokens accepted in the wrong context, stale identity data, weak assurance reuse, or unverified delegation. These are high-impact because they often preserve application availability while degrading security invisibly.
+Poorly justified exceptions become permanent vulnerabilities; governance sign-off is essential.
 
 **Performance implications**
 
-Performance risk comes from hidden remote dependencies and repeated validation work. Cache strategy, timeout policy and token/session lifetimes must be tuned together; otherwise, peak load amplifies control-plane ambiguity into runtime saturation.
+Over-designed architectures can underperform due to unnecessary hops and overvalidation.
 
-## 30.6 Troubleshooting
+## 30.5 Troubleshooting
 
-If case-study recommendations conflict, restate assumptions explicitly and separate policy from infrastructure constraints. Build troubleshooting as a layered checklist: protocol correctness, cryptographic validation, policy evaluation, then infrastructure health. This ordering avoids premature scaling or unsafe hotfixes.
+* If stakeholders challenge design, revisit assumptions and constraints openly.
+* If pilot fails, inspect mismatch between assumed and actual app integration behavior.
+* If costs exceed forecast, inspect hidden operational dependencies.
 
-## 30.7 Common misconceptions
+## 30.6 Common misconceptions
 
-* Reference architectures are not templates to copy blindly; context changes decisions.
-* "If it works in a demo, it is production-ready" — false; production requires resilience, observability and governance evidence.
-* "One successful login proves the design" — false; architecture quality is proven across lifecycle events, failure events and audit replay.
+* Reference architectures are directly copy-pasteable.
+* Most secure option is always best regardless latency/business impact.
+* Architecture decisions are static after go-live.
 
-## 30.8 Interview questions
+## 30.7 Interview questions (graded)
 
 **Beginner**
 
-1. What business problem does this chapter's topic solve in IAM?
-2. Which component in Keycloak is most directly involved?
+- **Q:** What is the primary goal of "Architecture case studies" in a Keycloak platform?
+- **Expected answer:** Focus on reason through real trade-offs across scale, regulation and budget.
 
 **Intermediate**
 
-3. Which trust boundary is easiest to misconfigure here, and why?
-4. What telemetry would you add to detect failure early?
+- **Q:** Which failure mode appears first when this area is misconfigured?
+- **Expected answer:** Usually one of: Presenting one final architecture without alternatives.
 
 **Senior**
 
-5. How would you design this area for high assurance without breaking developer velocity?
-6. Which trade-offs would you document for auditors and platform owners?
+- **Q:** What design trade-off do you document before rollout for Architecture case studies?
+- **Expected answer:** Document boundary ownership, rollback plan, and security vs latency trade-offs.
 
 **Expert**
 
-7. Describe a failure mode that remains "green" on infrastructure dashboards but is security-critical.
-8. How would you prove remediation quality after a major incident linked to this domain?
+- **Q:** How do you prove this domain is production-ready under failure?
+- **Expected answer:** By rehearsal with measurable SLO/security outcomes and audited control evidence.
 
-## 30.9 Summary
+## 30.8 Summary
 
-* This chapter's domain is fundamentally about explicit trust and ownership, not only feature enablement.
-* Keycloak implementation quality depends on mapping control-plane clarity to runtime enforcement.
-* Security and performance outcomes are coupled; both must be designed and measured together.
-* Troubleshooting quality improves dramatically when protocol, policy and infrastructure checks are ordered deliberately.
+* Architecture case studies needs explicit control-plane decisions before runtime tuning.
+* Failure modes are predictable and should be tested deliberately.
+* Security and performance implications must be treated together.
+* Interview-grade answers should combine mechanism detail and operational trade-offs.
 
-## 30.10 References
+## 30.9 References
 
-* SABSA principles
 * TOGAF ADM
+* SABSA
 * NIST CSF
 * ISO 27005
 
@@ -4191,120 +4047,115 @@ If case-study recommendations conflict, restate assumptions explicitly and separ
 # Chapter 31 — 200+ interview questions with expected answers
 
 > **Objectives of this chapter**
-> By the end of it you will be able to: explain why this domain exists in enterprise IAM, use precise vocabulary when designing with Keycloak, map the topic to production controls, diagnose common failure patterns, and answer graded interview questions with architecture-level trade-off reasoning.
+> Build interview mastery through structured answer patterns and topic coverage.
 
-## 31.1 Why this chapter matters before implementation
+## 31.1 Why this topic exists (before how)
 
-Interview preparation at senior levels is about structured reasoning, not memorization; expected answers reveal how architects think in layers. In interviews and production reviews, this topic is usually the boundary between configuration knowledge and architecture accountability: if the underlying rationale is weak, the resulting security model is brittle even when syntax is correct.
+200+ interview questions with expected answers is a recurring source of production risk because teams often optimize for initial setup speed and under-specify lifecycle controls. Senior-level design requires explicit boundaries, failure assumptions and ownership contracts before configuration work starts.
 
-The design principle used in this book remains the same: define trust boundaries, failure modes and ownership first; only then choose Keycloak settings, adapters, proxies or automation patterns. Question banks should train layered answers: context, decision, trade-offs, failure modes and measurable controls.
+## 31.2 Core mechanisms and architecture decisions
 
-## 31.2 Core model and terminology
+* Question banks should cover protocols, operations, security, and architecture trade-offs.
+* Expected answers must demonstrate structure: context -> mechanism -> risk -> mitigation.
+* Scoring rubric helps calibrate beginner/intermediate/senior/expert depth.
+* Practice should include whiteboard diagrams and failure-mode reasoning.
 
-The useful way to reason is to separate **control plane** from **runtime plane**. The control plane defines identities, credentials, policies and metadata ownership. The runtime plane carries protocol exchanges and enforcement decisions under latency and failure constraints. Many outages come from mixing the two and assuming runtime can fix control-plane ambiguity.
+## 31.3 Chapter schema
 
-For this chapter, keep three questions in scope: who is authoritative, what is cryptographically trusted, and where decisions are enforced. If one of these answers is implicit, incident response will be slower and audit evidence will be weaker.
-
-## 31.3 Keycloak implementation perspective
-
-Keycloak should be used as a deterministic trust service, not a collection of ad-hoc toggles. Start with a written contract (issuers, audiences, key material, lifecycle rules, mapper ownership), then encode it consistently in realms, clients, flows and automation.
-
-Operationally, introduce changes with rollback posture: canary realm/client changes, measurable acceptance criteria, and explicit compatibility windows for dependent applications. Security-sensitive defaults should be enforced centrally and reviewed through pull requests rather than direct console edits.
-
-## 31.4 Architecture schema
-
-Schema 31.1 — Control plane and runtime plane for chapter 31
+Schema 31.1 — 200+ interview questions with expected answers: control and runtime path
 
 ```mermaid
 flowchart TB
     subgraph CP[Control plane]
         direction TB
-        P[Policy and metadata]
-        I[Identity and credentials]
-        K[Key and trust material]
-        P --> I
-        I --> K
+        A[200+ interview questions with expected answers]
+        B[Policy and configuration]
+        C[Identity and trust data]
+        A --> B
+        B --> C
     end
 
     subgraph RP[Runtime plane]
         direction TB
-        C[Client or subject]
-        KC[Keycloak trust service]
-        E[Enforcement point]
-        R[Protected resource]
-        C --> KC
-        KC --> E
-        E --> R
+        D[Client or workload]
+        E[Keycloak]
+        F[Gateway or relying party]
+        G[Protected service]
+        D --> E
+        E --> F
+        F --> G
     end
 
     CP --> RP
 ```
 
-## 31.5 Production notes
+## 31.4 Production notes
 
 **Common mistakes**
 
-* Deploying configuration before clarifying authoritative ownership of identities, claims or policies.
-* Accepting default protocol/library behavior without explicit validation requirements.
-* Treating this topic as a one-time setup instead of an operational lifecycle.
+* Memorizing one-line definitions only.
+* Ignoring operational questions (DR, observability, scaling).
+* Practicing without feedback loop.
 
 **Best practices**
 
-* Define trust, ownership and rollback criteria in writing before rollout.
-* Measure runtime behavior with explicit SLO-oriented signals tied to this chapter's control points.
-* Rehearse failure drills that include both technical and governance decisions.
+* Use spaced repetition by topic family.
+* Practice answering with concrete production examples.
+* Review weak areas using RFC-backed source material.
 
 **Security implications**
 
-Misconfiguration in this area usually creates silent over-trust: tokens accepted in the wrong context, stale identity data, weak assurance reuse, or unverified delegation. These are high-impact because they often preserve application availability while degrading security invisibly.
+Interview prep artifacts may include sensitive architecture details; sanitize examples before sharing externally.
 
 **Performance implications**
 
-Performance risk comes from hidden remote dependencies and repeated validation work. Cache strategy, timeout policy and token/session lifetimes must be tuned together; otherwise, peak load amplifies control-plane ambiguity into runtime saturation.
+Short timed drills improve response fluency but should be balanced with deep-dive sessions.
 
-## 31.6 Troubleshooting
+## 31.5 Troubleshooting
 
-If answers sound shallow, force each response to include threat model, control, and verification evidence. Build troubleshooting as a layered checklist: protocol correctness, cryptographic validation, policy evaluation, then infrastructure health. This ordering avoids premature scaling or unsafe hotfixes.
+* If answers sound generic, add threat model and trade-off explicitly.
+* If timing is poor, rehearse structured 60-second and 5-minute versions.
+* If panel feedback is inconsistent, normalize with a scoring rubric.
 
-## 31.7 Common misconceptions
+## 31.6 Common misconceptions
 
-* Interview excellence is not jargon density; clarity and structured reasoning win.
-* "If it works in a demo, it is production-ready" — false; production requires resilience, observability and governance evidence.
-* "One successful login proves the design" — false; architecture quality is proven across lifecycle events, failure events and audit replay.
+* Interview success is about terminology density.
+* Only protocol trivia matters for senior roles.
+* Expected answers should be rigid scripts.
 
-## 31.8 Interview questions
+## 31.7 Interview questions (graded)
 
 **Beginner**
 
-1. What business problem does this chapter's topic solve in IAM?
-2. Which component in Keycloak is most directly involved?
+- **Q:** What is the primary goal of "200+ interview questions with expected answers" in a Keycloak platform?
+- **Expected answer:** Focus on build interview mastery through structured answer patterns and topic coverage.
 
 **Intermediate**
 
-3. Which trust boundary is easiest to misconfigure here, and why?
-4. What telemetry would you add to detect failure early?
+- **Q:** Which failure mode appears first when this area is misconfigured?
+- **Expected answer:** Usually one of: Memorizing one-line definitions only.
 
 **Senior**
 
-5. How would you design this area for high assurance without breaking developer velocity?
-6. Which trade-offs would you document for auditors and platform owners?
+- **Q:** What design trade-off do you document before rollout for 200+ interview questions with expected answers?
+- **Expected answer:** Document boundary ownership, rollback plan, and security vs latency trade-offs.
 
 **Expert**
 
-7. Describe a failure mode that remains "green" on infrastructure dashboards but is security-critical.
-8. How would you prove remediation quality after a major incident linked to this domain?
+- **Q:** How do you prove this domain is production-ready under failure?
+- **Expected answer:** By rehearsal with measurable SLO/security outcomes and audited control evidence.
 
-## 31.9 Summary
+## 31.8 Summary
 
-* This chapter's domain is fundamentally about explicit trust and ownership, not only feature enablement.
-* Keycloak implementation quality depends on mapping control-plane clarity to runtime enforcement.
-* Security and performance outcomes are coupled; both must be designed and measured together.
-* Troubleshooting quality improves dramatically when protocol, policy and infrastructure checks are ordered deliberately.
+* 200+ interview questions with expected answers needs explicit control-plane decisions before runtime tuning.
+* Failure modes are predictable and should be tested deliberately.
+* Security and performance implications must be treated together.
+* Interview-grade answers should combine mechanism detail and operational trade-offs.
 
-## 31.10 References
+## 31.9 References
 
 * NIST 800-63
-* OAuth 2.0 Security BCP
+* OAuth Security BCP
 * CIS controls
 * Well-Architected principles
 
@@ -4313,15 +4164,15 @@ If answers sound shallow, force each response to include threat model, control, 
 
 # Next chapters
 
-All planned chapters (2 through 31) are now drafted. The next editorial pass focuses on appendices deepening the RFC index, expanding `kcadm` cookbook recipes, and adding companion assets (sample JWT sets, policy snippets, and lab troubleshooting matrices) aligned with the current roadmap completion state.
+Immediate next pass: perform deep editorial and technical verification in review waves (Chapters 2-5 first, then 6-10, 11-16, 17-22, 23-27, 28-31), tighten RFC citations where needed, and expand appendices (`kcadm` cookbook, RFC index, sample JWT sets) linked to each chapter.
 
 ---
 
 ## Annexe: agent self-reference
 
 * **Purpose:** in-depth technical reference manual on IAM and Keycloak, written in **English only**, following the six-milestone roadmap above.
-* **Status:** Milestones M1 through M6 completed in draft form (Chapters 1 through 31 available).
+* **Status:** Chapters 1 through 31 drafted; revision pass in progress to ensure chapter-specific depth parity with Chapter 1.
 * **Writing contract:** each chapter must contain objectives, deep explanation of *why* before *how*, at least one Mermaid diagram, production notes (mistakes, best practices, security, performance), troubleshooting, common misconceptions, interview questions graded Beginner/Intermediate/Senior/Expert, a summary and references. Content is never compressed to save space.
 * **Related documents:** `IAM_Entretien_Prepa_FR.md` (French interview preparation), `IAM_Interview_Prep_EN.md` (English translation), `Senior_IAM_Keycloak_Interview_QA.md` (source Q&A), `KeyCloack Reference Book.docx` (original planning conversation).
-* **Next action:** prepare appendices and consistency review across cross-chapter terminology and diagrams.
+* **Next action:** complete reviewer-guided quality validation wave on Chapters 2-5, then continue by milestone batches.
 * **Last updated:** 2026-08-03.
